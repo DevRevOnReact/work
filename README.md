@@ -101,6 +101,26 @@ sent per deployed commit. The workflow can also be dispatched manually.
 `python scripts/ui_top_smoke.py` verifies the dedicated route, links, pagination,
 reload, refresh and mobile layout without changing user records.
 
+### Public LinkedIn research
+
+The top page can filter by LinkedIn. A separate Codex heartbeat researches
+public job pages every three hours while the computer and Codex are running;
+coverage is partial and is not LinkedIn's complete vacancy feed. It does not
+connect a mailbox or use a logged-in LinkedIn session. Only an explicit,
+confirmed publication date in the last 72 hours is accepted; a relative age in
+an old search snippet is insufficient.
+
+Research records contain the job URL, title, employer, location, factual summary,
+publication timestamp, date evidence and verification timestamp. Run
+`python scripts/prepare_linkedin_candidate.py vacancy.json` to validate a record
+and generate a safely encoded, idempotent INSERT for the existing database.
+The API processes this inbox, applies enabled searches and their selected
+resumes, and computes scores itself. Records cannot supply a score. Only scores
+of at least 60 enter the top and the existing Telegram outbox; messages include
+a short description and the complete LinkedIn URL. `/linkedin/jobs/status`
+reports processing counts behind the same authentication as other app APIs.
+The normal hosted employer-board schedule remains independent of this heartbeat.
+
 ## Development checks
 
 ```sh

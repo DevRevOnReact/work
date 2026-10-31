@@ -56,6 +56,8 @@ class SearchRuntime:
         while True:
             try:
                 await asyncio.to_thread(self.schedule_due)
+                from .linkedin_jobs import process_candidates
+                await asyncio.to_thread(process_candidates)
                 from .notifications import deliver_pending
                 await asyncio.to_thread(deliver_pending)
             except Exception:

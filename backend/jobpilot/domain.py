@@ -33,7 +33,7 @@ class Profile(BaseModel):
 
 
 class JobInput(BaseModel):
-    provider: Literal["greenhouse", "ashby", "lever", "remotive", "arbeitnow", "manual"]
+    provider: Literal["greenhouse", "ashby", "lever", "remotive", "arbeitnow", "manual", "linkedin"]
     external_id: str
     canonical_url: str
     company: str

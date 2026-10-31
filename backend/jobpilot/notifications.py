@@ -81,7 +81,9 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
             continue
         message = (f"JobPilot · топ за 3 дня · {job['score']}/100\n\n"
                    f"{job['company'][:120]} · {job['title'][:240]}\n{job.get('location', '')[:200]}\n"
-                   f"Опубликовано: {job['published_at']}\n\n{job['canonical_url']}")
+                   f"Опубликовано: {job['published_at']}\n\n"
+                   + (("LinkedIn · " + ' '.join(job.get('description', '').split())[:500] + "\n\n")
+                      if job.get("provider") == "linkedin" else "") + job['canonical_url'])
         if len(message) > 4096:
             # Preserve the complete URL; truncate only descriptive text.
             message = f"JobPilot · {job['score']}/100\n{job['canonical_url']}"

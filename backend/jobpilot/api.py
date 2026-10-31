@@ -12,6 +12,7 @@ from .history_api import router as history_router
 from .http import authenticate, serialize as serialize
 from .job_api import router as job_router
 from .linkedin_api import router as linkedin_router
+from .linkedin_jobs import router as linkedin_jobs_router
 from .profile_api import router as profile_router
 from .resume_api import router as resume_router
 from .search_api import router as search_router
@@ -76,6 +77,7 @@ app.include_router(job_router)
 app.include_router(history_router)
 app.include_router(search_router)
 app.include_router(linkedin_router)
+app.include_router(linkedin_jobs_router)
 app.include_router(company_router)
 app.include_router(notification_router)
 app.include_router(top_router)

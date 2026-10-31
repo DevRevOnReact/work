@@ -8,9 +8,10 @@ import type { WorkspaceState } from "@/hooks/use-workspace";
 
 export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
   const [page, setPage] = useState(0);
+  const [provider, setProvider] = useState("");
   const refreshing = s.searches.data?.some(search => busy(search.status));
-  const data = useQuery<TopVacancies>({queryKey: ["top-vacancies", page],
-    queryFn: () => api(`top-vacancies?offset=${page * 20}&limit=20`), retry: false,
+  const data = useQuery<TopVacancies>({queryKey: ["top-vacancies", page, provider],
+    queryFn: () => api(`top-vacancies?offset=${page * 20}&limit=20&provider=${provider}`), retry: false,
     refetchInterval: refreshing ? 2000 : 15000});
   const notification = useQuery<{telegram: boolean; telegram_counts: Record<string, number>; last_error: string | null}>({
     queryKey: ["notifications/status"], queryFn: () => api("notifications/status"), retry: false, refetchInterval: 15000});
@@ -20,6 +21,9 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
       <button className="button primary" disabled={s.pending || refreshing || !s.searches.data?.some(search => search.enabled)}
         onClick={() => void s.action(() => api("discover", "POST"), "Обновление подборки запущено")}>{refreshing ? "Подборка обновляется…" : "Обновить подборку"}</button></div>
     <p className="hint">Новые подходящие вакансии отправляются в Telegram отдельными сообщениями с полной ссылкой. Одна вакансия не дублируется между поисками.</p>
+    <label>Источник вакансий<select value={provider} onChange={event => {setProvider(event.target.value); setPage(0);}}>
+      <option value="">Все источники</option><option value="linkedin">LinkedIn</option></select></label>
+    {provider === "linkedin" && <p className="hint">Публичная выдача LinkedIn может быть неполной. В топ попадают только вакансии с подтверждённой датой публикации и оценкой по вашему резюме от 60. В Telegram добавляется краткое описание.</p>}
     {notification.data && <p role="status">Telegram: {notification.data.telegram ? `подключён · отправлено ${notification.data.telegram_counts?.sent || 0} · в очереди ${notification.data.telegram_counts?.pending || 0}` : "не настроен"}</p>}
     {notification.error && <p className="notice error">Не удалось проверить состояние Telegram: {notification.error.message}</p>}
     {notification.data?.last_error && <p className="notice error">Ошибка уведомлений: {notification.data.last_error}</p>}

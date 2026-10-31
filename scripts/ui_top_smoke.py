@@ -16,8 +16,10 @@ def main():
         parsed = urlsplit(route.request.url)
         path = parsed.path.split('/api/backend/', 1)[1]
         if path == 'top-vacancies':
-            offset = int(parse_qs(parsed.query).get('offset', ['0'])[0])
-            value = {"total": len(items), "items": items[offset:offset+20], "window_hours": 72, "min_score": 60}
+            params = parse_qs(parsed.query)
+            offset = int(params.get('offset', ['0'])[0])
+            selected = [dict(items[0], provider='linkedin', canonical_url='https://www.linkedin.com/jobs/view/1234567890')] if params.get('provider') == ['linkedin'] else items
+            value = {"total": len(selected), "items": selected[offset:offset+20], "window_hours": 72, "min_score": 60}
         elif path == 'notifications/status':
             value = {"telegram": True, "telegram_counts": {"sent": 21}, "last_error": None}
         elif path == 'discover':
@@ -44,6 +46,10 @@ def main():
         page.screenshot(path=str(output / 'top-desktop.png'), full_page=True)
         page.get_by_role('button', name='Далее', exact=True).click()
         expect(page.locator('.top-vacancy')).to_have_count(1)
+        page.get_by_label('Источник вакансий').select_option('linkedin')
+        expect(page.locator('.top-vacancy')).to_have_count(1)
+        expect(page.locator('.top-vacancy').first.get_by_role('link', name='Открыть вакансию ↗')).to_have_attribute('href', 'https://www.linkedin.com/jobs/view/1234567890')
+        expect(page.get_by_text('Публичная выдача LinkedIn', exact=False)).to_be_visible()
         page.reload(wait_until='networkidle')
         expect(page.get_by_role('heading', name='Топ за 3 дня', exact=True)).to_be_visible()
         page.set_viewport_size({"width": 390, "height": 844})

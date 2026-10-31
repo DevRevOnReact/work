@@ -1,7 +1,7 @@
 """Persist high-scoring results independently from each search's daily snapshot."""
 import hashlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select
@@ -50,12 +50,15 @@ def save_top_vacancies(db: Session, search: SavedSearch, results: list[dict[str,
     db.execute(delete(TopVacancy).where(TopVacancy.published_at < current - timedelta(hours=WINDOW_HOURS)))
 
 
-def top_rows(db: Session) -> list[TopVacancy]:
+def top_rows(db: Session, provider: str = "") -> list[TopVacancy]:
     current = now()
-    rows = db.scalars(select(TopVacancy).where(
+    query = select(TopVacancy).where(
         TopVacancy.score >= MIN_SCORE, TopVacancy.published_at >= current - timedelta(hours=WINDOW_HOURS),
         TopVacancy.published_at <= current,
-    ).order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
+    )
+    if provider:
+        query = query.where(TopVacancy.data["provider"].as_string() == provider)
+    rows = db.scalars(query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
     unique: dict[str, TopVacancy] = {}
     for row in rows:
         unique.setdefault(row.data["canonical_url"], row)
@@ -64,8 +67,9 @@ def top_rows(db: Session) -> list[TopVacancy]:
 
 @router.get("/top-vacancies")
 def top_vacancies(offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=100),
+                  provider: Literal["", "linkedin"] = "",
                   db: Session = Depends(session)) -> dict[str, Any]:
-    rows = top_rows(db)
+    rows = top_rows(db, provider)
     fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "eligibility")
     return {"window_hours": WINDOW_HOURS, "min_score": MIN_SCORE, "total": len(rows),
             "items": [{**{key: row.data.get(key) for key in fields}, "id": row.id, "score": row.score,
