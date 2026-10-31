@@ -1,6 +1,7 @@
 """Persisted, deduplicated search digests. Delivery errors never fail a search."""
 import hashlib
 import os
+import re
 import time
 from datetime import timedelta
 from typing import Any
@@ -148,6 +149,19 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
                     # HTTP exception strings contain request URLs, including bot tokens.
                     item.error = (f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError)
                                   else type(exc).__name__)
+                    if item.channel == "telegram" and isinstance(exc, httpx.HTTPStatusError):
+                        try:
+                            description = str(exc.response.json().get("description", ""))
+                            description = description.replace(config.telegram_bot_token.get_secret_value(), "[TOKEN]")
+                            description = re.sub(r"https?://\S+", "[URL]", description)
+                            item.error += ": " + description[:220]
+                            if exc.response.status_code == 403:
+                                me = client.get(f"https://api.telegram.org/bot{config.telegram_bot_token.get_secret_value()}/getMe")
+                                username = str(me.json().get("result", {}).get("username", ""))
+                                if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+                                    item.error += f" (бот @{username})"
+                        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+                            pass
                     retry = 0
                     if isinstance(exc, httpx.HTTPStatusError):
                         try:

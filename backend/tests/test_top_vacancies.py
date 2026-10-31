@@ -167,3 +167,23 @@ def test_cloud_can_queue_without_copying_bot_credentials_or_app_password(db, mon
     second = notifications.queue_deployment_test(db, "b" * 40)
     assert first.id == second.id and first.status == "pending"
     assert len(list(db.scalars(select(SearchNotification)))) == 2
+
+
+def test_telegram_forbidden_identifies_bot_without_exposing_token(db, monkeypatch):
+    enable(monkeypatch)
+    value = search(db)
+    notifications.enqueue_top_telegram(db, value.id, [job()])
+    db.commit()
+    @contextmanager
+    def factory(): yield db
+    monkeypatch.setattr(notifications, "SessionLocal", factory)
+    original = httpx.Client
+    def respond(request):
+        if request.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"username": "ExampleJobPilotBot"}})
+        return httpx.Response(403, json={"description": "Forbidden: bots can't send messages to bots https://api.telegram.org/botsecret-bot-token/sendMessage"})
+    monkeypatch.setattr(notifications.httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
+    notifications.deliver_pending()
+    item = db.scalar(select(SearchNotification))
+    assert "bots can't send messages to bots" in item.error
+    assert "@ExampleJobPilotBot" in item.error and "secret-bot-token" not in item.error
