@@ -44,7 +44,10 @@ def prepare(content: bytes, filename: str, old_sha: str, locations: list[str]) -
         "ON CONFLICT (resume_id) DO NOTHING",
         "UPDATE candidates SET facts=((facts::jsonb - 'search_scoring_version') || "
         f"jsonb_build_object('search_locations',{json_value(list(dict.fromkeys(locations)))},'resumes',"
-        f"COALESCE(facts::jsonb->'resumes','{{}}'::jsonb)||jsonb_build_object({chosen},{json_value(record)})))::json,"
+        "COALESCE((SELECT jsonb_object_agg(key,CASE WHEN key IN "
+        f"(SELECT id FROM resumes WHERE sha256='{old_sha}') THEN value||'{{\"search_retired\":true}}'::jsonb "
+        "ELSE value END) FROM jsonb_each(COALESCE(facts::jsonb->'resumes','{}'::jsonb))),'{}'::jsonb)"
+        f"||jsonb_build_object({chosen},{json_value(record)})))::json,"
         "version=version+1 WHERE id=1",
         f"UPDATE saved_searches SET resume_id={chosen},filters=(CASE WHEN name LIKE '%· основной поиск' "
         f"AND filters->>'skills_mode'='any' THEN filters::jsonb||jsonb_build_object('skills',{json_value(skills)}) "

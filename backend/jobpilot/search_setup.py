@@ -38,6 +38,8 @@ def ensure_resume_searches(db: Session) -> int:
     created = 0
     for resume in db.scalars(select(Resume).order_by(Resume.created_at)):
         record = records.get(resume.id, {})
+        if record.get("search_retired"):
+            continue  # Retained historical artifacts must not recreate an automatic search.
         if resume.id not in existing and not record.get("text"):
             # Rehydrate pre-search uploads from their stored artifact, without activating them.
             from .config import settings

@@ -29,6 +29,17 @@ def test_setup_keeps_all_existing_parameters_and_is_idempotent(db):
     assert created.filters["skills"] == "React" and created.filters["skills_mode"] == "any"
 
 
+def test_retained_historical_resume_does_not_recreate_search(db):
+    first, second = setup_resumes(db)
+    candidate = db.get(Candidate, 1)
+    records = dict(candidate.facts["resumes"])
+    records[first.id] = {**records[first.id], "search_retired": True}
+    candidate.facts = {**candidate.facts, "resumes": records}
+    assert ensure_resume_searches(db) == 1
+    assert db.scalar(select(SavedSearch).where(SavedSearch.resume_id == first.id)) is None
+    assert db.scalar(select(SavedSearch).where(SavedSearch.resume_id == second.id))
+
+
 def test_any_all_alternatives_and_work_modes():
     job = vacancy()
     assert matches(job, SearchFilters(title="Designer, Engineer", location="Armenia, Berlin", skills="React, Python", skills_mode="any"))
