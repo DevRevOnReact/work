@@ -64,7 +64,7 @@ def configure(repository: str, url: str, email: str, database: str, password: st
         response.raise_for_status()
         names = {item["name"] for item in response.json()["secrets"]}
         assert {"DATABASE_URL", "LOGIN_PASSWORD"} <= names
-    print("GitHub schedule configured: encrypted DATABASE_URL and LOGIN_PASSWORD; daily job enabled.")
+    print("GitHub schedule configured: encrypted DATABASE_URL and LOGIN_PASSWORD; three-hour job enabled.")
 
 
 if __name__ == "__main__":

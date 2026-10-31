@@ -45,7 +45,7 @@ celery.conf.update(
     task_soft_time_limit=540,
     task_time_limit=600,
     beat_schedule={
-        "daily_searches": {"task": "jobpilot.schedule_searches", "schedule": crontab(hour=0, minute=0)},
+        "three_hour_searches": {"task": "jobpilot.schedule_searches", "schedule": crontab(hour="*/3", minute=0)},
 
 
 
@@ -341,9 +341,9 @@ def telegram_commands() -> None:
 # Scheduled searches run separately from the legacy application automation.
 @celery.task(name="jobpilot.schedule_searches")
 def schedule_searches() -> None:
-    from .models import SavedSearch
+    from .schedule import due_searches
     with SessionLocal() as db:
-        ids = list(db.scalars(select(SavedSearch.id).where(SavedSearch.enabled.is_(True))))
+        ids = due_searches(db)
     for search_id in ids:
         run_saved_search.delay(search_id)
 

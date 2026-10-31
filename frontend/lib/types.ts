@@ -13,6 +13,17 @@ export type SavedSearch = {
   id: string; name: string; resume_id: string; enabled: boolean; status: string;
   started_at: string | null; completed_at: string | null; filters: Filters;
   result_count: number; errors: string[];
+  progress?: SearchProgress; next_run_at?: string | null; schedule_timezone?: string;
+};
+export type SearchProgress = {
+  stage?: string; message?: string; updated_at?: string; done?: number; total?: number;
+  fetched?: number; fresh?: number; failures?: number;
+  events?: {at: string; message: string; level: string}[];
+};
+export type CompanyDiscovery = {
+  id: string; country: string; page: number; status: string; progress: SearchProgress;
+  started_at: string; completed_at: string | null;
+  result: {found?: number; added?: number; errors?: string[]; next_page?: number | null};
 };
 export type SearchDetail = SavedSearch & {results: JobResult[]};
 export type SearchInput = Pick<SavedSearch, "name" | "resume_id" | "enabled" | "filters">;
@@ -21,6 +32,6 @@ export type Source = {id: string; company: string; provider: string; board: stri
 export type Lead = {id: string; name: string; company: string; location: string; profile_url: string; notes: string};
 export type Company = {
   id: string; name: string; careers_url: string; sources: Source[]; contacts: Lead[];
-  signals: {kind: string; url: string; note: string; location: string; checked_at: string; confidence: string; rank?: number}[];
+  signals: {kind: string; url: string; note: string; location: string; country?: string; checked_at: string; confidence: string; rank?: number}[];
 };
 export type PageName = "search" | "companies" | "sources" | "resumes";

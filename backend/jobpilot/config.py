@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     store_resume_files_in_db: bool = False
     embedded_searches: bool = True
     automatic_search_schedule: bool = True
+    search_timezone: str = "Europe/Moscow"
     data_dir: Path = Path("data")
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""

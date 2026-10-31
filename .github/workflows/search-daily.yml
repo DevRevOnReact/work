@@ -1,8 +1,8 @@
-name: Daily vacancy search
+name: Vacancy search every three hours
 on:
   schedule:
-    # 03:17 Moscow, independently of Render sleep.
-    - cron: "17 0 * * *"
+    # Every 3 hours, independently of Render sleep; off the busy hour boundary.
+    - cron: "17 */3 * * *"
   workflow_dispatch:
 permissions:
   contents: read

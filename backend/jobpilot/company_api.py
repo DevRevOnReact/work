@@ -1,15 +1,17 @@
+from datetime import timedelta
 from time import monotonic
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from .companies import (
     COUNTRIES,
+    COUNTRY_LABELS,
     company_key,
     discover_employers,
     save_company,
@@ -17,7 +19,8 @@ from .companies import (
 )
 from .db import session
 from .http import authenticate, serialize
-from .models import Company, ReferralLead, Source
+from .models import Company, CompanyDiscovery, ReferralLead, Source, now
+from .progress import advance
 
 router = APIRouter(dependencies=[Depends(authenticate)])
 _last_discovery = float("-inf")
@@ -25,7 +28,7 @@ _last_discovery = float("-inf")
 
 @router.get("/companies")
 def companies(q: str = Query(default="", max_length=200),
-              signal: Literal["", "cis_profile", "referrals", "regional_presence", "resume_fit"] = "",
+              signal: Literal["", "cis_profile", "github_profile", "it_catalog", "referrals", "regional_presence", "resume_fit"] = "",
               db: Session = Depends(session)) -> list[dict[str, Any]]:
     sources = list(db.scalars(select(Source)))
     leads = list(db.scalars(select(ReferralLead)))
@@ -45,7 +48,9 @@ def companies(q: str = Query(default="", max_length=200),
     words = q.strip().casefold().split()
     return sorted([item for item in items.values()
                    if all(word in (item["name"] + " " + " ".join(
-                       s.get("location", "") for s in item["signals"])).casefold() for word in words)
+                       " ".join([s.get("location", ""), s.get("country", ""),
+                                 COUNTRY_LABELS.get(s.get("country", ""), "")])
+                       for s in item["signals"])).casefold() for word in words)
                    and (not signal or any(s["kind"] == signal for s in item["signals"]))],
                   key=lambda item: item["name"].casefold())
 
@@ -62,6 +67,45 @@ class DiscoverInput(BaseModel):
     page: int = Field(default=1, ge=1, le=10)
 
 
+@router.get("/companies/regions")
+def discovery_regions() -> dict[str, str]:
+    return COUNTRY_LABELS
+
+
+@router.get("/companies/discoveries")
+def discovery_status(db: Session = Depends(session)) -> list[dict[str, Any]]:
+    jobs = list(db.scalars(select(CompanyDiscovery).order_by(CompanyDiscovery.started_at.desc()).limit(10)))
+    for job in jobs:
+        if job.status in {"queued", "running"} and job.started_at.replace(tzinfo=now().tzinfo) < now() - timedelta(minutes=5):
+            job.status, job.completed_at = "failed", now()
+            message = "Поиск компаний прерван; запустите его снова"
+            job.result = {"errors": [message]}
+            job.progress = advance(job.progress, "failed", message, "error")
+    db.commit()
+    return [serialize(job) for job in jobs]
+
+
+@router.post("/companies/discover/start", status_code=202)
+def start_discovery(body: DiscoverInput, background: BackgroundTasks,
+                    db: Session = Depends(session)) -> dict[str, Any]:
+    global _last_discovery
+    if body.country not in COUNTRIES:
+        raise HTTPException(422, "Выберите страну из списка")
+    if monotonic() - _last_discovery < 30:
+        raise HTTPException(429, "Подождите 30 секунд перед повторным поиском")
+    active = db.scalar(select(CompanyDiscovery).where(CompanyDiscovery.status.in_(["queued", "running"])))
+    if active:
+        raise HTTPException(409, "Поиск компаний уже выполняется; дождитесь завершения")
+    _last_discovery = monotonic()
+    job = CompanyDiscovery(country=body.country, page=body.page,
+                           progress=advance({}, "queued", "Поиск компаний поставлен в очередь", done=0, total=0))
+    db.add(job)
+    db.commit()
+    from .company_discovery import run_discovery
+    background.add_task(run_discovery, job.id, sessionmaker(db.get_bind(), expire_on_commit=False))
+    return serialize(job)
+
+
 @router.post("/companies/discover")
 async def discover(body: DiscoverInput, db: Session = Depends(session)) -> dict[str, Any]:
     global _last_discovery
@@ -70,6 +114,9 @@ async def discover(body: DiscoverInput, db: Session = Depends(session)) -> dict[
     if monotonic() - _last_discovery < 30:
         raise HTTPException(429, "Подождите 30 секунд перед повторным поиском")
     _last_discovery = monotonic()
+    if body.country == "Worldwide":
+        from .companies import discover_global_catalog
+        return discover_global_catalog(db, lambda *args, **kwargs: None)
     try:
         found, errors = await discover_employers(body.country, body.page)
     except httpx.HTTPStatusError as exc:

@@ -22,7 +22,7 @@ export function SearchEditor({selected, resumes, pending, onSave, onCancel}: {
       </div>
       <SearchFilters value={filters} onChange={setFilters}/>
       <label className="check-label"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)}/>
-        Обновлять ежедневно · 03:00 по Москве (00:00 UTC)</label>
+        Обновлять каждые 3 часа · только вакансии за сегодня по Москве</label>
       <div className="button-row"><button className="button primary" disabled={!resume || !name.trim()}>{pending ? "Сохраняем…" : "Сохранить настройки"}</button>
         <button className="button" type="button" onClick={onCancel}>Отмена</button></div>
       <p className="hint">После изменения фильтров запустите поиск, чтобы получить новые результаты. Общие условия профиля учитываются при оценке.</p>

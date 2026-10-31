@@ -2,6 +2,7 @@
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -122,12 +123,25 @@ def matches(job: JobInput, filters: SearchFilters, result: dict[str, Any] | None
                              (not filters.eligibility or result["eligibility"] == filters.eligibility))
 
 
-def make_results(db: Session, search: SavedSearch, jobs: list[JobInput]) -> tuple[list[dict[str, Any]], int]:
+def published_today(job: JobInput, at: datetime | None = None) -> bool:
+    from .config import settings
+    if not job.published_at:
+        return False
+    current = at or datetime.now(UTC)
+    published = job.published_at.replace(tzinfo=UTC) if job.published_at.tzinfo is None else job.published_at
+    zone = ZoneInfo(settings().search_timezone)
+    return published <= current and published.astimezone(zone).date() == current.astimezone(zone).date()
+
+
+def make_results(db: Session, search: SavedSearch, jobs: list[JobInput], *,
+                 today_only: bool = False, at: datetime | None = None) -> tuple[list[dict[str, Any]], int]:
     profile = search_profile(db, search.resume_id)
     filters = SearchFilters.model_validate(search.filters)
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for job in jobs:
+        if today_only and not published_today(job, at):
+            continue
         if job.canonical_url in seen:
             continue
         seen.add(job.canonical_url)

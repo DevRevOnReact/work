@@ -1,4 +1,4 @@
-"""Daily GitHub Actions job; works while the free web server is asleep."""
+"""Three-hour GitHub Actions job; works while the free web server is asleep."""
 from datetime import datetime, timezone, timedelta
 import os
 from pathlib import Path
@@ -13,19 +13,18 @@ def main() -> None:
     from jobpilot.models import SavedSearch
     from jobpilot.notifications import deliver_pending
     from jobpilot.search_runner import run_saved_search
+    from jobpilot.schedule import due_searches
+    from jobpilot.progress import advance
     if not os.environ.get("DATABASE_URL", "").startswith("postgresql+psycopg://"):
         raise RuntimeError("Cloud search job requires a persistent PostgreSQL DATABASE_URL")
-    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     with SessionLocal() as db:
         db.execute(update(SavedSearch).where(
             SavedSearch.status.in_(["queued", "running"]),
             SavedSearch.started_at < datetime.now(timezone.utc) - timedelta(minutes=20),
-        ).values(status="failed", errors=["Предыдущий запуск прерван"]))
+        ).values(status="failed", completed_at=datetime.now(timezone.utc), errors=["Предыдущий запуск прерван"],
+                 progress=advance({}, "failed", "Предыдущий запуск прерван", "error")))
         db.commit()
-        ids = list(db.scalars(select(SavedSearch.id).where(
-            SavedSearch.enabled.is_(True), SavedSearch.status.notin_(["queued", "running"]),
-            (SavedSearch.started_at.is_(None)) | (SavedSearch.started_at < midnight),
-        )))
+        ids = due_searches(db)
     for search_id in ids:
         run_saved_search(search_id)
         with SessionLocal() as db:

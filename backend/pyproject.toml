@@ -11,7 +11,7 @@ dependencies = [
   "sqlalchemy>=2.0.36,<3", "psycopg[binary]>=3.2,<4", "alembic>=1.14,<2",
   "httpx>=0.28,<1",
   "python-multipart>=0.0.20,<1", "beautifulsoup4>=4.12,<5",
-  "rapidfuzz>=3.11,<4", "structlog>=25,<27", "pypdf>=6.19.0,<7"
+  "rapidfuzz>=3.11,<4", "structlog>=25,<27", "pypdf>=6.19.0,<7", "tzdata>=2026.1"
 ]
 [project.optional-dependencies]
 automation = ["celery[redis]>=5.4,<6", "playwright>=1.51,<2"]

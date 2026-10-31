@@ -139,6 +139,19 @@ class SavedSearch(Base):
     results: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     result_count: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[list[str]] = mapped_column(JSON, default=list)
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class CompanyDiscovery(Base):
+    __tablename__ = "company_discoveries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    country: Mapped[str] = mapped_column(String(80))
+    page: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class ReferralLead(Base):
     __tablename__ = "referral_leads"

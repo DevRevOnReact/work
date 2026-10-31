@@ -9,6 +9,8 @@ from .config import settings
 from .db import session
 from .http import authenticate, serialize
 from .models import SavedSearch, SearchNotification, now
+from .progress import advance
+from .schedule import next_run
 from .search_setup import ensure_resume_searches
 from .searches import SearchInput, search_profile
 
@@ -33,11 +35,15 @@ def list_searches(db: Session = Depends(session)) -> list[dict[str, Any]]:
         db.execute(update(SavedSearch).where(
             SavedSearch.id.in_(stale), SavedSearch.status == "running",
             SavedSearch.started_at < now() - timedelta(minutes=20),
-        ).values(status="failed", errors=["Поиск прерван; запустите его снова"]))
+        ).values(status="failed", completed_at=now(), errors=["Поиск прерван; запустите его снова"],
+                 progress=advance({}, "failed", "Поиск прерван: превышено время выполнения", "error")))
         db.commit()
     # Summary polling must not repeatedly transfer up to 500 full descriptions per CV.
     columns = [column for column in SavedSearch.__table__.columns if column.name != "results"]
-    return [dict(row) for row in db.execute(select(*columns).order_by(SavedSearch.name)).mappings()]
+    schedule_offset = 17 if settings().hosted_mode and not settings().automatic_search_schedule else 0
+    return [{**dict(row), "next_run_at": next_run(row["started_at"], schedule_offset) if row["enabled"] else None,
+             "schedule_timezone": settings().search_timezone}
+            for row in db.execute(select(*columns).order_by(SavedSearch.name)).mappings()]
 
 
 @router.post("/searches/setup")
@@ -77,6 +83,7 @@ def update_search(search_id: str, body: SearchInput, db: Session = Depends(sessi
     s.name, s.resume_id, s.filters, s.enabled = body.name.strip(), body.resume_id, body.filters.model_dump(), body.enabled
     if changed:
         s.results, s.result_count, s.completed_at, s.errors, s.status = [], 0, None, [], "idle"
+        s.progress = {}
     db.commit()
     return serialize(s)
 
@@ -108,10 +115,23 @@ def run_search(search_id: str, request: Request, db: Session = Depends(session))
         if not runtime.enqueue(search_id):
             raise HTTPException(409, "Поиск уже в очереди")
         return {"queued": True}
+    # Claim before publishing so duplicate requests cannot enqueue the same search.
+    claimed = db.execute(update(SavedSearch).where(
+        SavedSearch.id == search_id, SavedSearch.status.notin_(["queued", "running"]),
+    ).values(status="queued", started_at=now(), completed_at=None, errors=[],
+             progress=advance({}, "queued", "В очереди фонового обработчика"))
+      .returning(SavedSearch.id)).scalar_one_or_none()
+    db.commit()
+    if not claimed:
+        raise HTTPException(409, "Поиск уже в очереди")
     from .workers import run_saved_search
     try:
         run_saved_search.delay(search_id)
     except Exception as exc:
+        db.execute(update(SavedSearch).where(SavedSearch.id == search_id).values(
+            status="failed", completed_at=now(), errors=["Очередь недоступна"],
+            progress=advance({}, "failed", "Очередь недоступна", "error")))
+        db.commit()
         raise HTTPException(503, "Очередь недоступна; проверьте Redis и worker") from exc
     return {"queued": True}
 

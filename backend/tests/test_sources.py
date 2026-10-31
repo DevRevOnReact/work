@@ -85,6 +85,14 @@ def test_canonical_strips_tracking_not_identity():
     )
 
 
+async def test_greenhouse_http_links_fall_back_to_same_job_on_official_https_board():
+    payload = {"jobs": [{"id": 123, "absolute_url": "http://www.circleci.com/careers/jobs/123?gh_jid=123",
+                         "title": "Engineer", "location": {"name": "Remote"}, "content": "Python"}]}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=payload))) as client:
+        jobs = await GreenhouseSource(client).fetch("circleci", "CircleCI")
+    assert jobs[0].canonical_url == "https://boards.greenhouse.io/circleci/jobs/123"
+
+
 async def test_remotive_keeps_geographic_restrictions_attribution_and_disk_cache(tmp_path, monkeypatch):
     from jobpilot.config import settings
     monkeypatch.setattr(settings(), "data_dir", tmp_path)

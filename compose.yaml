@@ -27,7 +27,7 @@ services:
       DATA_DIR: /data
       AUTH_REQUIRED: "false"
       EMBEDDED_SEARCHES: "true"
-    # One API process owns the queue and daily scheduler.
+    # One API process owns the queue and three-hour scheduler.
     command: [sh, -c, "alembic upgrade head && exec uvicorn jobpilot.api:app --host 0.0.0.0 --port 8000 --workers 1"]
     volumes:
       - artifacts:/data

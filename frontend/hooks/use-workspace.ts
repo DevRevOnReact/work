@@ -20,7 +20,7 @@ export function useWorkspace() {
   const [sourceCompany, setSourceCompany] = useState("");
   const searches = useQuery<SavedSearch[]>({
     queryKey: ["searches"], queryFn: () => api("searches"), retry: false,
-    refetchInterval: state => page === "search" && state.state.data?.some(s => busy(s.status)) ? 3000 : false,
+    refetchInterval: state => page === "search" ? state.state.data?.some(s => busy(s.status)) ? 2000 : 15000 : false,
   });
   const resumes = useResource<Resume[]>("resumes");
   const current = (selected ? searches.data?.find(s => s.id === selected) : !editing ? searches.data?.[0] : null) || null;

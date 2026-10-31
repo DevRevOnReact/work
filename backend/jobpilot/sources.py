@@ -59,7 +59,10 @@ class GreenhouseSource(PublicFeed):
             JobInput(
                 provider="greenhouse",
                 external_id=f"{board}:{j['id']}",
-                canonical_url=canonical(j["absolute_url"]),
+                # Some employers still publish HTTP/custom non-web links (e.g. CircleCI).
+                # The official ATS URL is a stable HTTPS fallback for the same job ID.
+                canonical_url=canonical(j["absolute_url"] if urlsplit(j["absolute_url"]).scheme == "https"
+                                        else f"https://boards.greenhouse.io/{board}/jobs/{j['id']}"),
                 company=company,
                 title=j["title"],
                 location=j.get("location", {}).get("name", ""),
