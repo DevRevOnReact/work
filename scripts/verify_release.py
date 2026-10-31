@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import traceback
 from urllib.parse import urlsplit
 
 import httpx
@@ -126,5 +127,6 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         detail = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
-        print('Release verification failed: ' + detail, flush=True)
+        frames = [f'{Path(frame.filename).name}:{frame.lineno}:{frame.name}' for frame in traceback.extract_tb(exc.__traceback__)]
+        print('Release verification failed: ' + detail + '; locations=' + ' -> '.join(frames), flush=True)
         sys.exit(1)
