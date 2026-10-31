@@ -70,6 +70,28 @@ def test_pg_migrations_audit_and_concurrent_claim(monkeypatch):
                 c.execute(text("UPDATE audit SET kind='tamper'"))
         with factory() as db:
             assert db.scalar(select(Application)).state == "APPLYING"
+            from jobpilot.models import SavedSearch
+            db.add(SavedSearch(name="CV · основной поиск", resume_id=resume.id, filters={"skills_mode": "any"}))
+            db.commit()
+        # Exercise the generated PostgreSQL JSON/bytea update, including a retry.
+        import hashlib
+        import runpy
+        from test_resumes import pdf_bytes
+        from jobpilot.models import ResumeFile, SavedSearch
+        prepare = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                                     "scripts/prepare_search_profile_update.py"))["prepare"]
+        content = pdf_bytes()
+        statements = prepare(content, "replacement.pdf", "f" * 64, ["Serbia", "Georgia"])
+        for _ in range(2):
+            with engine.begin() as connection:
+                for statement in statements:
+                    connection.execute(text(statement))
+        with factory() as db:
+            replacement = db.scalar(select(Resume).where(Resume.sha256 == hashlib.sha256(content).hexdigest()))
+            assert replacement and db.scalar(select(SavedSearch)).resume_id == replacement.id
+            assert db.get(Resume, resume.id).sha256 == "f" * 64
+            assert db.get(ResumeFile, replacement.id).content == content
+            assert db.get(Candidate, 1).facts["search_locations"] == ["Serbia", "Georgia"]
     finally:
         engine.dispose()
         with admin.begin() as c:

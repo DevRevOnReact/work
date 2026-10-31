@@ -15,6 +15,7 @@ class Profile(BaseModel):
     resume_filename: str | None = None
     resume_parse_warnings: list[str] = Field(default_factory=list)
     location: str = ""
+    search_locations: list[str] = Field(default_factory=list)
     years_experience: float = Field(default=0, ge=0)
     portfolio: str = ""
     linkedin: str | None = None
@@ -66,7 +67,7 @@ def transition_allowed(before: str, after: str, has_intent: bool = False) -> boo
 
 def profile_fingerprint(profile: Profile) -> str:
     """Invalidate persisted scores when candidate facts or the active resume change."""
-    return hashlib.sha256(profile.model_dump_json().encode()).hexdigest()
+    return hashlib.sha256(("matching-v2:" + profile.model_dump_json()).encode()).hexdigest()
 
 
 def _contains(term: str, text: str) -> bool:
@@ -92,6 +93,8 @@ SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "React Native": ("react native",),
     "Next.js": ("next.js", "nextjs"),
     "Vue": ("vue", "vue.js", "vuejs"),
+    "PixiJS": ("pixijs", "pixi.js"), "WebGL": ("webgl",), "GSAP": ("gsap",),
+    "RxJS": ("rxjs",), "NgRx": ("ngrx",),
     "Angular": ("angular", "angularjs"),
     "TypeScript": ("typescript",), "JavaScript": ("javascript",),
     "Python": ("python",), "Java": ("java",), "Go": ("go", "golang"),
@@ -123,10 +126,10 @@ SKILL_ALIASES: dict[str, tuple[str, ...]] = {
 KNOWN_SKILLS: tuple[str, ...] = tuple(SKILL_ALIASES)
 DOMAIN_ALIASES: dict[str, tuple[str, ...]] = {
     "SaaS": ("saas",), "fintech": ("fintech", "финтех"),
-    "payments": ("payments", "платежи", "платежей"),
-    "subscriptions": ("subscriptions", "подписки"), "CRM": ("crm",),
-    "analytics": ("analytics", "аналитика"), "dashboards": ("dashboards",),
-    "internal tools": ("internal tools",), "AI": ("ai", "artificial intelligence"),
+    "payments": ("payments", "payment", "платежи", "платежей", "платежи", "платёжные", "платежных"),
+    "subscriptions": ("subscriptions", "subscription", "подписки", "подписок"), "CRM": ("crm",),
+    "analytics": ("analytics", "аналитика", "аналитическими"), "dashboards": ("dashboards", "dashboard", "дашборды"),
+    "internal tools": ("internal tools", "внутренние инструменты"), "AI": ("ai", "artificial intelligence", "ии"),
     "LLM": ("llm", "large language models"), "observability": ("observability",),
     "healthcare": ("healthcare", "здравоохранение"),
     "ecommerce": ("ecommerce", "e-commerce"), "banking": ("banking", "банкинг"),
@@ -179,6 +182,7 @@ _COUNTRIES = {
     "united states": ("united states", "usa", "us", "u.s.", "сша"),
     "united kingdom": ("united kingdom", "uk", "britain", "великобритания"),
     "georgia": ("georgia", "грузия"),
+    "serbia": ("serbia", "сербия", "сербии"),
     "germany": ("germany", "deutschland", "германия"),
     "canada": ("canada", "канада"),
     "poland": ("poland", "польша"),
@@ -189,9 +193,29 @@ _COUNTRIES = {
     "india": ("india", "индия"),
     "brazil": ("brazil", "бразилия"),
     "australia": ("australia", "австралия"),
+    "austria": ("austria", "австрия"), "belgium": ("belgium", "бельгия"),
+    "bulgaria": ("bulgaria", "болгария"), "croatia": ("croatia", "хорватия"),
+    "cyprus": ("cyprus", "кипр"), "czechia": ("czechia", "czech republic", "чехия"),
+    "denmark": ("denmark", "дания"), "estonia": ("estonia", "эстония"),
+    "finland": ("finland", "финляндия"), "greece": ("greece", "греция"),
+    "hungary": ("hungary", "венгрия"), "ireland": ("ireland", "ирландия"),
+    "italy": ("italy", "италия"), "latvia": ("latvia", "латвия"),
+    "lithuania": ("lithuania", "литва"), "luxembourg": ("luxembourg", "люксембург"),
+    "malta": ("malta", "мальта"), "romania": ("romania", "румыния"),
+    "slovakia": ("slovakia", "словакия"), "slovenia": ("slovenia", "словения"),
+    "sweden": ("sweden", "швеция"), "norway": ("norway", "норвегия"),
+    "iceland": ("iceland", "исландия"), "liechtenstein": ("liechtenstein", "лихтенштейн"),
+    "switzerland": ("switzerland", "швейцария"), "turkey": ("turkey", "türkiye", "турция"),
+    "japan": ("japan", "япония"), "singapore": ("singapore", "сингапур"),
+    "mexico": ("mexico", "мексика"), "argentina": ("argentina", "аргентина"),
+    "israel": ("israel", "израиль"), "south africa": ("south africa", "юар"),
+    "uae": ("united arab emirates", "uae", "оаэ"),
 }
-_EEA = {"germany", "poland", "france", "netherlands", "spain", "portugal"}
-_EMEA = _EEA | {"united kingdom", "georgia"}
+_EU = {"austria", "belgium", "bulgaria", "croatia", "cyprus", "czechia", "denmark", "estonia", "finland",
+       "france", "germany", "greece", "hungary", "ireland", "italy", "latvia", "lithuania", "luxembourg",
+       "malta", "netherlands", "poland", "portugal", "romania", "slovakia", "slovenia", "spain", "sweden"}
+_EEA = _EU | {"norway", "iceland", "liechtenstein"}
+_EMEA = _EEA | {"united kingdom", "georgia", "serbia", "switzerland", "turkey", "israel", "uae", "south africa"}
 
 
 def _countries(text: str) -> set[str]:
@@ -203,6 +227,13 @@ def _countries(text: str) -> set[str]:
 
 
 def _eligibility(job: JobInput, profile: Profile) -> tuple[str, list[str]]:
+    if profile.search_locations:
+        options = [(place, _eligibility(job, profile.model_copy(update={"location": place, "search_locations": []})))
+                   for place in dict.fromkeys(profile.search_locations) if place.strip()]
+        if options:
+            best = min(options, key=lambda item: {"eligible": 0, "unknown": 1, "rejected": 2}[item[1][0]])
+            return best[1][0], [f"Проверены варианты: {', '.join(place + ' — ' + result[0] for place, result in options)}",
+                               *best[1][1]]
     text = f"{job.location}\n{job.description}".lower()
     location = job.location.lower()
     reasons: list[str] = []
@@ -237,8 +268,8 @@ def _eligibility(job: JobInput, profile: Profile) -> tuple[str, list[str]]:
         r"remote[^.!\n]{0,25}worldwide", job.description.lower()
     ))
     regional = bool(re.search(r"\b(?:emea|eu|eea|europe)\b", location))
-    if re.search(r"\b(?:eu|eea)[ -]only\b", text):
-        scope = _EEA
+    if re.search(r"\b(?:eu|eea)[ -]only\b", text) or re.search(r"\b(?:eu|eea)\b", location):
+        scope = _EEA if _contains("eea", location) or re.search(r"\beea[ -]only\b", text) else _EU
         worldwide = False
     elif _contains("emea", location):
         scope = scope or _EMEA
@@ -293,100 +324,8 @@ def _eligibility(job: JobInput, profile: Profile) -> tuple[str, list[str]]:
 
 
 def evaluate(job: JobInput, profile: Profile, at: datetime | None = None) -> dict[str, Any]:
-    """Evidence-only lexical matching; unknown criteria earn zero, gates never add points."""
-    resume = profile.resume_text.strip().lower() if profile.active_resume_id else ""
-    text = f"{job.title}\n{job.description}".lower()
-    eligibility, reasons = _eligibility(job, profile)
-    criteria: list[dict[str, Any]] = []
-
-    def add(key: str, label: str, score: int, reason: str) -> None:
-        criteria.append({"key": key, "label": label, "score": max(0, min(10, score)) if resume else 0,
-                         "reason": reason if resume else "Неизвестно: резюме не загружено или текст не извлечён"})
-
-    def overlap(key: str, label: str, required: set[str], evidence: set[str]) -> None:
-        matches = sorted(required & evidence)
-        add(key, label, round(10 * len(matches) / len(required)) if required else 0,
-            ("Подтверждено в резюме: " + ", ".join(matches) +
-             (". Неизвестно: " + ", ".join(sorted(required - evidence)) if required - evidence else ""))
-            if matches else "Неизвестно: совпадающие сведения в резюме не найдены")
-
-    vocabulary = dict(SKILL_ALIASES)
-    for skill in profile.skills:
-        if skill.strip() and not any(_contains(skill, alias) for aliases in vocabulary.values() for alias in aliases):
-            vocabulary[skill] = (skill,)
-    required_skills = _detected(text, vocabulary)
-    resume_skills = _detected(resume, vocabulary)
-    requested = sorted(required_skills & resume_skills)
-    if required_skills:
-        overlap("stack", "Профессиональные навыки", required_skills, resume_skills)
-    else:
-        overlap("stack", "Профессиональные навыки", _terms(job.description), _terms(resume))
-    role_words = {"engineer", "developer", "specialist", "manager", "специалист", "разработчик"}
-    role_required = _terms(job.title) | {w for w in role_words if _contains(w, job.title)}
-    role_evidence = _terms(resume) | {w for w in role_words if _contains(w, resume)}
-    overlap("role", "Соответствие роли", role_required, role_evidence)
-    years = [float(n.replace(",", ".")) for n in re.findall(
-        r"\b(\d{1,2}(?:[.,]\d+)?)\+?\s*(?:years?|yrs?|лет|года?)\b", text
-    )]
-    required = max(years, default=0)
-    actual = profile.years_experience
-    add("experience", "Продолжительность опыта",
-        max(0, 10 - int(max(0, required - actual) * 2)) if required and actual else 0,
-        f"Вакансия: {required:g} лет; резюме: {actual:g} лет. Недостаток опыта снижает балл"
-        if required and actual else "Неизвестно: длительность опыта или требование не указаны")
-    domain_vocabulary = dict(DOMAIN_ALIASES)
-    for domain in profile.domains:
-        if domain.strip() and domain not in domain_vocabulary:
-            domain_vocabulary[domain] = (domain,)
-    overlap("domain", "Предметная область", _detected(text, domain_vocabulary),
-            _detected(resume, domain_vocabulary))
-    overlap("responsibilities", "Опыт выполнения задач", _terms(job.description), _terms(resume))
-    education = set(re.findall(
-        r"bachelor|master|phd|degree|бакалавр|магистр|высшее", job.description.lower()
-    ))
-    overlap("education", "Образование", education, _terms(resume))
-    language_names = {"english", "russian", "german", "french", "spanish", "английский", "русский"}
-    language_names |= {name.lower() for name in profile.languages}
-    languages = {name for name in language_names if _contains(name, text)}
-    overlap("languages", "Языки", languages, {name for name in languages if _contains(name, resume)})
-    add("location", "Место и формат работы", 10 if eligibility == "eligible" else 0,
-        "Совместимость места и формата работы подтверждена" if eligibility == "eligible"
-        else "Неизвестно или несовместимо: " + "; ".join(reasons))
-    offered = _salary_range(job.salary or "")
-    expected = _salary_range(profile.salary_expectation or "")
-    comparable = bool(offered and expected and offered[2:] == expected[2:])
-    salary_match = bool(comparable and offered and expected and
-                        max(offered[0], expected[0]) <= min(offered[1], expected[1]))
-    add("compensation", "Условия оплаты", 10 if salary_match else 0,
-        "Диапазон оплаты пересекается с ожиданиями; валюта и период совпадают" if salary_match
-        else "Диапазон оплаты не пересекается с ожиданиями" if comparable
-        else "Неизвестно: совместимость валюты, периода и суммы оплаты не подтверждена")
-    age = None
-    if job.published_at:
-        date = job.published_at
-        if date.tzinfo is None:
-            date = date.replace(tzinfo=UTC)
-        reference = at or datetime.now(UTC)
-        if reference.tzinfo is None:
-            reference = reference.replace(tzinfo=UTC)
-        age = max(0, (reference - date).days)
-    freshness = 0 if age is None else 10 if age <= 2 else 7 if age <= 7 else 4 if age <= 14 else 1 if age <= 30 else 0
-    add("freshness", "Актуальность вакансии", freshness,
-        f"Опубликована {age} дн. назад" if age is not None else "Неизвестно: дата публикации не указана")
-    if not resume:
-        reasons.append("Неизвестно: загрузите резюме с извлекаемым текстом для оценки")
-    reasons.extend(f"Предупреждение разбора резюме: {warning}" for warning in profile.resume_parse_warnings)
-    parts = {item["key"]: item["score"] for item in criteria}
-    return {
-        "score": sum(parts.values()), "eligibility": eligibility,
-        "breakdown": parts, "criteria": criteria, "reasons": reasons,
-        "matched_skills": requested,
-        "missing_skills": sorted(required_skills - resume_skills),
-        "freshness_days": age,
-        "compensation_note": criteria[8]["reason"],
-        "active_resume_id": profile.active_resume_id,
-        "profile_fingerprint": profile_fingerprint(profile),
-    }
+    from .matching import evaluate_match
+    return evaluate_match(job, profile, at)
 
 
 def resume_variant(title: str, description: str) -> str:

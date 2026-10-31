@@ -168,7 +168,7 @@ def test_bootstrap_replaces_legacy_scores_without_changing_user_facts_or_notifyi
     before = dict(candidate.facts)
     messages = db.scalar(select(func.count()).select_from(Outbox))
     bootstrap(db)
-    assert candidate.facts == before
+    assert {key: candidate.facts[key] for key in before} == before
     assert job.score == 0
     assert len(job.explanation["criteria"]) == 10
     assert app.state == "MATCHED"

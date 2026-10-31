@@ -49,11 +49,14 @@ def search_profile(db: Session, resume_id: str) -> Profile:
         raise ValueError("Текст резюме недоступен; загрузите файл повторно")
     # Keep separately entered location and authorization, but use only the chosen
     # document's extracted experience and skills, never the active document's.
-    facts = {**candidate.facts, **record.get("facts", {}),
-             "location": candidate.facts.get("location", "") or record.get("facts", {}).get("location", ""),
+    from .resumes import extract_facts
+    parsed_facts, _ = extract_facts(record["text"])
+    facts = {**candidate.facts, **parsed_facts,
+             "location": candidate.facts.get("location", "") or parsed_facts.get("location", ""),
              "active_resume_id": resume_id,
              "resume_text": record["text"], "resume_filename": resume.filename,
-             "resume_parse_warnings": record.get("warnings", [])}
+             "resume_parse_warnings": record.get("warnings", []),
+             "search_locations": candidate.facts.get("search_locations", [])}
     return Profile.model_validate(facts)
 
 
@@ -119,7 +122,9 @@ def matches(job: JobInput, filters: SearchFilters, result: dict[str, Any] | None
         published = job.published_at.replace(tzinfo=UTC) if job.published_at.tzinfo is None else job.published_at
         if published < datetime.now(UTC) - timedelta(days=filters.posted_days):
             return False
-    return result is None or (result["score"] >= filters.min_score and
+    return result is None or ((filters.eligibility == "rejected" or
+                              (result.get("recommendable", True) and result["eligibility"] != "rejected")) and
+                             result["score"] >= filters.min_score and
                              (not filters.eligibility or result["eligibility"] == filters.eligibility))
 
 

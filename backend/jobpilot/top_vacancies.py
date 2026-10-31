@@ -28,7 +28,9 @@ def qualifies(job: dict[str, Any], at: datetime | None = None) -> bool:
     current = at or now()
     published = publication(job.get("published_at"))
     return bool(published and current - timedelta(hours=WINDOW_HOURS) <= published <= current
-                and job.get("score", 0) >= MIN_SCORE and job.get("canonical_url", "").startswith("https://"))
+                and job.get("score", 0) >= MIN_SCORE and job.get("eligibility") != "rejected"
+                and job.get("explanation", {}).get("recommendable", True)
+                and job.get("canonical_url", "").startswith("https://"))
 
 
 def save_top_vacancies(db: Session, search: SavedSearch, results: list[dict[str, Any]]) -> None:
@@ -61,7 +63,8 @@ def top_rows(db: Session, provider: str = "") -> list[TopVacancy]:
     rows = db.scalars(query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
     unique: dict[str, TopVacancy] = {}
     for row in rows:
-        unique.setdefault(row.data["canonical_url"], row)
+        if qualifies(row.data, current):
+            unique.setdefault(row.data["canonical_url"], row)
     return list(unique.values())
 
 

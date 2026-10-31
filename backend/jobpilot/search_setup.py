@@ -17,9 +17,11 @@ def resume_filters(resume: Resume, record: dict[str, Any]) -> SearchFilters:
     variant = resume.variant
     title = ""
     if variant in {"full-stack", "react-python-ai"} or re.search(r"full[ -]?stack", headline):
-        title = "Full Stack, Fullstack, Full-stack"
+        title = "Full Stack, Fullstack, Full-stack, Software Engineer, Product Engineer"
+        if "Python" in record.get("facts", {}).get("skills", []):
+            title += ", Backend, Back-end, Back end"
     elif variant == "frontend" or re.search(r"front[ -]?end", headline):
-        title = "Frontend, Front-end, Front end"
+        title = "Frontend, Front-end, Front end, UI Engineer, Web Engineer, Web Developer, Product Engineer, Software Engineer"
     elif re.search(r"back[ -]?end", headline):
         title = "Backend, Back-end, Back end"
     # Skills are alternatives: requiring every skill in a CV hides good roles.

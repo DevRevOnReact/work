@@ -36,6 +36,7 @@ SKILLS = (
     "Go", "Golang", "Rust", "C++", "C#", ".NET", "PHP", "Laravel", "Ruby", "Rails",
     "Angular", "Vue", "Svelte", "Swift", "Flutter", "Pandas", "NumPy", "PyTorch",
     "TensorFlow", "OpenAI", "LangChain", "LLM", "Figma", "Jest", "Playwright", "Cypress",
+    "PixiJS", "WebGL", "GSAP", "RxJS", "NgRx", "Svelte",
 )
 DOMAINS = (
     "SaaS", "fintech", "payments", "subscriptions", "CRM", "dashboards", "analytics",
@@ -45,6 +46,7 @@ ALIASES = {
     "React": r"react(?:\.js|js)?", "Next.js": r"next\.?js",
     "Node.js": r"node\.?js", "PostgreSQL": r"postgres(?:ql)?",
     "Tailwind": r"tailwind(?:\s*css)?", "Vue": r"vue(?:\.js|js)?",
+    "PixiJS": r"pixi\.?js", "WebSockets": r"websockets?",
 }
 
 
@@ -119,6 +121,9 @@ def extract_facts(text: str) -> tuple[dict[str, Any], list[str]]:
             text, re.IGNORECASE,
         )
     if not years:
+        years = re.search(r"\b(?:более|свыше)\s+(\d{1,2}(?:[.,]\d)?)\+?\s+лет\s+"
+                          r"(?:разрабатываю|разработки|работаю|работы|опыта)", text, re.IGNORECASE)
+    if not years:
         years = re.search(
             r"\b(?:опыт(?:\s+работы)?|experience)\s*[:—-]\s*"
             r"(\d{1,2}(?:[.,]\d)?)\+?\s*(?:лет|года?|год|years?|yrs?)\b",
@@ -126,6 +131,14 @@ def extract_facts(text: str) -> tuple[dict[str, Any], list[str]]:
         )
     if years:
         facts["years_experience"] = float(years.group(1).replace(",", "."))
+    if not facts["location"]:
+        # Only read an explicit country in the contact/header area, never an employer's address.
+        from .domain import _countries
+        for line in lines[:6]:
+            countries = _countries(line)
+            if countries and re.search(r"remote|удал[её]н|based in|\||·|,", line, re.I):
+                facts["location"] = ", ".join(sorted(countries))
+                break
     language_labels = {
         "English": r"english|английский", "Russian": r"russian|русский",
         "German": r"german|немецкий", "French": r"french|французский",

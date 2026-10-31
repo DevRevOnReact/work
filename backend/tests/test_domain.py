@@ -70,7 +70,8 @@ def test_arbitrary_roles_are_not_hard_excluded(title):
     profile = resume_profile(resume_text=title + ". " + vacancy().description)
     result = evaluate(vacancy(title=title), profile)
     assert result["eligibility"] == "eligible"
-    assert result["breakdown"]["role"] == 10
+    criterion = next(c for c in result["criteria"] if c["key"] == "role")
+    assert criterion["score"] == criterion["max_score"]
 
 
 def test_unknown_authorization_blocks():
@@ -96,7 +97,8 @@ def test_max_score_and_weights():
     assert result["score"] == sum(result["breakdown"].values())
     assert len(result["breakdown"]) == len(result["criteria"]) == 10
     assert {c["key"]: c["score"] for c in result["criteria"]} == result["breakdown"]
-    assert all(0 <= c["score"] <= 10 and c["label"] and c["reason"] for c in result["criteria"])
+    assert all(0 <= c["score"] <= c["max_score"] and c["label"] and c["reason"] for c in result["criteria"])
+    assert sum(c["max_score"] for c in result["criteria"]) == 100
 
 
 def test_uncertain_never_automatically_retried():
@@ -183,9 +185,11 @@ def test_missing_job_skills_and_domains_are_independent_of_candidate():
     narrow = resume_profile(resume_text="Backend Java Engineer. Java banking.", skills=["Java"])
     broad = narrow.model_copy(update={"skills": ["Java", "Python", "React", "Docker"]})
     result = evaluate(job, narrow)
-    assert result["breakdown"]["stack"] == 3
+    criterion = next(c for c in result["criteria"] if c["key"] == "stack")
+    assert criterion["score"] == round(criterion["max_score"] / 3)
     assert result["missing_skills"] == ["AWS", "Kotlin"]
-    assert result["breakdown"]["domain"] == 5
+    criterion = next(c for c in result["criteria"] if c["key"] == "domain")
+    assert criterion["score"] == round(criterion["max_score"] / 2)
     assert "insurance" in next(c["reason"] for c in result["criteria"] if c["key"] == "domain")
     assert evaluate(job, broad)["breakdown"]["stack"] == result["breakdown"]["stack"]
 
@@ -194,7 +198,7 @@ def test_non_software_resume_and_russian_title():
     job = vacancy(title="Специалист по подбору персонала", description="Excel recruiting")
     profile = resume_profile(resume_text="Специалист по подбору персонала. Excel recruiting.")
     result = evaluate(job, profile)
-    assert result["breakdown"]["role"] == result["breakdown"]["stack"] == 10
+    assert all(c["score"] == c["max_score"] for c in result["criteria"] if c["key"] in {"role", "stack"})
     assert result["eligibility"] == "eligible"
 
 
@@ -235,8 +239,10 @@ def test_restriction_in_description_overrides_worldwide():
 def test_salary_comparison_is_conservative(offer, expectation, score, unknown):
     result = evaluate(vacancy(salary=offer), resume_profile(salary_expectation=expectation))
     criterion = next(c for c in result["criteria"] if c["key"] == "compensation")
-    assert criterion["score"] == score
+    assert criterion["score"] == criterion["max_score"] == 0
     assert ("Неизвестно" in criterion["reason"]) == unknown
+    if not unknown:
+        assert bool(result["blockers"]) == (score == 0)
 
 
 def test_all_ten_criteria_can_reach_ten_with_explicit_evidence():
@@ -246,7 +252,8 @@ def test_all_ten_criteria_can_reach_ten_with_explicit_evidence():
                              salary_expectation="USD 90k/year")
     result = evaluate(job, profile)
     assert result["score"] == 100
-    assert list(result["breakdown"].values()) == [10] * 10
+    assert all(c["score"] == c["max_score"] for c in result["criteria"])
+    assert result["breakdown"]["stack"] == 40 and result["breakdown"]["responsibilities"] == 25
 
 
 def test_eligibility_gate_does_not_erase_evidence_scores():

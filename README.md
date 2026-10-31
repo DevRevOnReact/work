@@ -75,6 +75,20 @@ Salary/employment filters match employer text; currencies and pay periods are no
 
 ## Top vacancies and Telegram
 
+Matching v2 scores professional evidence with stack 40%, tasks 25%, role 15%,
+experience 10% and domain 10%. Missing requirements redistribute their weight;
+salary, education, language and geography are separate checks. Missing core or
+explicitly mandatory technologies, incompatible CEFR levels, a major experience
+gap, unconfirmed Staff/Principal scope and rejected geography block top delivery
+regardless of the professional score. Optional skills and explicit alternatives
+are handled separately. Task concepts recognize Russian and English wording;
+this is an explainable rule system, not an external semantic model.
+
+`search_locations` stores explicitly confirmed alternative locations. Each is
+checked independently; it never declares work authorization. Startup reparses
+stored CV text and rescales stored results once per algorithm version. Custom
+filters remain intact; untouched primary role defaults gain related role titles.
+
 `/top` is a dedicated page for vacancies published within the last **72 hours**
 with a resume score of **60 or higher**. Each search scores this three-day window
 in addition to keeping its normal today-only results. Top entries persist across

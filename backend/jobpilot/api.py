@@ -86,4 +86,6 @@ app.include_router(top_router)
 @app.get("/release", dependencies=[Depends(authenticate)])
 def release() -> dict[str, str | int]:
     import os
-    return {"commit": os.environ.get("RENDER_GIT_COMMIT", "local"), "top_window_hours": 72, "top_min_score": 60}
+    from .matching import SCORING_VERSION
+    return {"commit": os.environ.get("RENDER_GIT_COMMIT", "local"), "top_window_hours": 72,
+            "top_min_score": 60, "scoring_version": SCORING_VERSION}

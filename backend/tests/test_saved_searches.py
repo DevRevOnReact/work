@@ -41,7 +41,7 @@ def test_independent_profiles_and_filters(db):
     s1 = SavedSearch(name="Python", resume_id=first.id, filters={}, enabled=True)
     s2 = SavedSearch(name="React", resume_id=second.id, filters={}, enabled=True)
     one, _ = make_results(db, s1, [job, job]); two, _ = make_results(db, s2, [job])
-    assert len(one) == 1 and one[0]["score"] != two[0]["score"]
+    assert len(one) == 1 and two == []  # A React-only resume cannot qualify for a Python role.
 
 
 def test_search_polling_stays_available_during_sqlite_writer(tmp_path):

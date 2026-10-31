@@ -7,7 +7,7 @@ export type Filters = {
 export type JobResult = {
   title: string; company: string; location: string; salary: string | null; provider: string;
   canonical_url: string; published_at: string | null; score: number; eligibility: string;
-  description: string; explanation: {criteria?: {key: string; label: string; score: number; reason: string}[]};
+  description: string; explanation: {blockers?: string[]; criteria?: {key: string; label: string; score: number; max_score?: number; reason: string}[]};
 };
 export type SavedSearch = {
   id: string; name: string; resume_id: string; enabled: boolean; status: string;

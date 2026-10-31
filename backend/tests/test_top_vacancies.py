@@ -51,7 +51,8 @@ def test_each_qualifying_job_is_queued_once_globally_without_truncating_urls(db,
     first, second = search(db), search(db)
     jobs = [job(f"https://example.com/{index}") for index in range(510)]
     long_url = "https://example.com/" + "x" * 1200
-    jobs.append(dict(job(long_url), score=60, eligibility="rejected"))
+    jobs.append(dict(job(long_url), score=60))
+    jobs.append(dict(job("https://example.com/rejected"), score=95, eligibility="rejected"))
     jobs.extend([dict(job("https://example.com/low"), score=59), dict(job("https://example.com/old"),
                  published_at=(now()-timedelta(days=4)).isoformat()), dict(job("https://example.com/undated"), published_at=None)])
     assert notifications.enqueue_top_telegram(db, first.id, jobs) == 511

@@ -29,6 +29,8 @@ def bootstrap(db: Session) -> None:
     db.flush()
     candidate = db.get(Candidate, 1)
     assert candidate is not None
+    from .scoring_refresh import refresh_search_scoring
+    refresh_search_scoring(db, candidate)
     candidate_profile, active_resume_valid = scoring_context(db, candidate)
     fingerprint = profile_fingerprint(candidate_profile)
     # Rebuild legacy scores locally, preserving all stored candidate facts and attempts.
@@ -207,6 +209,8 @@ def readiness(
         return "Profile changed; rescore against the active resume before applying"
     if job.score < MINIMUM_QUALIFICATION_SCORE:
         return f"Vacancy score is below the {MINIMUM_QUALIFICATION_SCORE}-point qualification threshold"
+    if not job.explanation.get("recommendable", True):
+        return "Required qualifications not confirmed: " + "; ".join(job.explanation.get("blockers", []))
     if job.eligibility != "eligible":
         return "Work eligibility needs confirmation for your profile"
     if job.duplicate_of:
