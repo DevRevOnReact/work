@@ -60,8 +60,9 @@ def enqueue_digest(db: Session, search: SavedSearch, results: list[dict[str, Any
             db.add(SearchNotification(id=identity, search_id=search.id, channel=channel, message=message))
 
 
-def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]) -> int:
-    if "telegram" not in channels():
+def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]], *,
+                         enqueue_without_credentials: bool = False) -> int:
+    if not enqueue_without_credentials and "telegram" not in channels():
         return 0
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -215,6 +216,15 @@ def deployment_test(db: Session = Depends(session)) -> dict[str, Any]:
     if "telegram" not in channels():
         raise HTTPException(409, "Telegram не настроен: нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID на Render")
     commit = os.environ.get("RENDER_GIT_COMMIT", "local")
+    item = queue_deployment_test(db, commit)
+    db.commit()
+    deliver_pending(only_ids=[item.id], batch_size=1)
+    db.refresh(item)
+    return {"id": item.id, "commit": commit, "status": item.status,
+            "provider_message_id": item.provider_message_id, "error": item.error}
+
+
+def queue_deployment_test(db: Session, commit: str) -> SearchNotification:
     identity = hashlib.sha256(f"telegram-deployment-test:{commit}".encode()).hexdigest()
     item = db.get(SearchNotification, identity)
     if item is None:
@@ -227,8 +237,5 @@ def deployment_test(db: Session = Depends(session)) -> dict[str, Any]:
                                           "Топ вакансий за последние 3 дня: оценка от 60/100.\n"
                                           f"{settings().public_app_url.rstrip('/')}/top")
         db.add(item)
-        db.commit()
-    deliver_pending(only_ids=[identity], batch_size=1)
-    db.refresh(item)
-    return {"id": identity, "commit": commit, "status": item.status,
-            "provider_message_id": item.provider_message_id, "error": item.error}
+        db.flush()
+    return item

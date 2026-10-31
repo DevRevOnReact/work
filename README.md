@@ -92,8 +92,10 @@ after Telegram accepts a message but before the database commits the receipt.
 After successful CI on `main`, **Verify deployment and Telegram** waits for the
 exact Render commit, calls the idempotent deployment-test endpoint, records the
 Telegram message ID, refreshes searches to populate the top immediately and
-drains Telegram's queue. It uses the existing GitHub `LOGIN_PASSWORD` secret and
-`PUBLIC_APP_URL` variable; bot credentials remain on Render. One test message is
+drains Telegram's queue. It uses the existing GitHub `DATABASE_URL` secret and
+`PUBLIC_APP_URL` variable to write the protected database outbox and wake the
+public health endpoint; bot credentials remain on Render and browser passwords
+are not needed by the scheduled jobs. One test message is
 sent per deployed commit. The workflow can also be dispatched manually.
 
 `python scripts/ui_top_smoke.py` verifies the dedicated route, links, pagination,

@@ -153,3 +153,17 @@ def test_expired_top_messages_are_not_sent_even_during_retry_cooldown(db, monkey
     monkeypatch.setattr(notifications.httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
     notifications.deliver_pending()
     assert item.status == "expired" and not calls
+
+
+def test_cloud_can_queue_without_copying_bot_credentials_or_app_password(db, monkeypatch):
+    from pydantic import SecretStr
+    monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr(""))
+    monkeypatch.setattr(settings(), "telegram_chat_id", "")
+    value = search(db)
+    assert notifications.enqueue_top_telegram(db, value.id, [job()]) == 0
+    assert notifications.enqueue_top_telegram(db, value.id, [job()], enqueue_without_credentials=True) == 1
+    first = notifications.queue_deployment_test(db, "b" * 40)
+    db.commit()
+    second = notifications.queue_deployment_test(db, "b" * 40)
+    assert first.id == second.id and first.status == "pending"
+    assert len(list(db.scalars(select(SearchNotification)))) == 2

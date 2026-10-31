@@ -23,8 +23,6 @@ jobs:
       NOTIFICATION_EMAIL: ${{ vars.NOTIFICATION_EMAIL }}
       NOTIFICATION_FROM: ${{ vars.NOTIFICATION_FROM || 'JobPilot <onboarding@resend.dev>' }}
       PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
-      LOGIN_USER: jobpilot
-      LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
       STORE_RESUME_FILES_IN_DB: "true"
     steps:
       - uses: actions/checkout@v4

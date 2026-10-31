@@ -18,8 +18,7 @@ jobs:
     environment: production
     env:
       PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
-      LOGIN_USER: jobpilot
-      LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
