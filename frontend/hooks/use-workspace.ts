@@ -26,7 +26,7 @@ export function useWorkspace() {
   const current = (selected ? searches.data?.find(s => s.id === selected) : !editing ? searches.data?.[0] : null) || null;
   const detail = useQuery<SearchDetail>({
     queryKey: [`searches/${current?.id}`, current?.completed_at, current?.status], queryFn: () => api(`searches/${current?.id}`),
-    enabled: Boolean(current && !editing && !busy(current.status)), retry: false,
+    enabled: Boolean(current && !editing), retry: false,
     // The summaries change at completion; descriptions are fetched only for the selected search.
     staleTime: 30_000,
   });

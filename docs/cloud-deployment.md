@@ -31,7 +31,9 @@ Use the migration helper below to transfer a local workspace to an empty databas
 6. Verify `/health` is ready, anonymous `/` and `/api/backend/profile` return
    401, then sign in and open results, a resume file and the companies shortlist.
 
-New commits deploy automatically only after CI checks pass. Update the linked
+The Blueprint selects automatic deployment after CI checks pass. For a directly
+created MCP service, auto-deploy is on commit; its setting can be changed to
+**After CI Checks Pass** in the Render dashboard. Update the linked
 production branch to release changes; deploy an earlier successful Render build to
 roll back code. Database migrations remain managed by Alembic and run at startup.
 
@@ -74,8 +76,9 @@ It can also run manually from Actions.
 GitHub scheduling can be delayed; this is not a precise delivery-time guarantee.
 GitHub and Neon usage must remain within the account's free quotas.
 
-The web runtime can also run searches manually and catches up daily runs while it
-is active. Both paths atomically claim saved searches. A web restart leaves a live
+The cloud web runtime runs searches manually; automatic daily execution runs in
+GitHub Actions (`AUTOMATIC_SEARCH_SCHEDULE=false` on Render). Native local servers
+keep their built-in daily schedule. Both paths atomically claim saved searches. A web restart leaves a live
 cloud run alone; runs older than 20 minutes can be recovered.
 
 ## Durability and limits

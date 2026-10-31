@@ -12,6 +12,7 @@ export function SearchResults({search, filename}: {search: SearchDetail; filenam
     <div className="tags">{activeFilters({...emptyFilters, ...search.filters}).map(item =>
       <span className="filter-chip" key={item.key}>{item.label}</span>)}</div>
     {search.status === "failed" && <p className="notice error">Обновление не удалось. Ниже сохранены результаты предыдущего успешного запуска.</p>}
+    {["queued", "running"].includes(search.status) && <p role="status">Поиск обновляется. Ниже сохранены результаты предыдущего запуска.</p>}
     {search.errors.map((error, i) => <p className="notice error" key={i}>{error}</p>)}
     {jobs.map(job => <details className="search-result" key={job.canonical_url}>
       <summary><div><strong>{job.title}</strong><span>{job.company} · {job.location || "Место не указано"}</span></div>

@@ -56,6 +56,8 @@ class SearchRuntime:
             await asyncio.sleep(30)
 
     def schedule_due(self) -> None:
+        if not settings().automatic_search_schedule:
+            return
         midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         with SessionLocal() as db:
             ids = list(db.scalars(select(SavedSearch.id).where(
