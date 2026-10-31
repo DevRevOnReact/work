@@ -14,6 +14,13 @@ from nacl import public, encoding
 
 
 def configure(repository: str, url: str, email: str, database: str, password: str) -> None:
+    from sqlalchemy.engine import make_url
+    parsed = make_url(database)
+    if (parsed.drivername != "postgresql+psycopg" or not parsed.password or
+            not parsed.host or not parsed.host.endswith(".neon.tech")):
+        raise ValueError("Invalid Neon database URL")
+    if len(password) < 16:
+        raise ValueError("Application password is too short")
     environment = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
     result = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
                             text=True, capture_output=True, env=environment, check=True)
@@ -65,12 +72,17 @@ if __name__ == "__main__":
     parser.add_argument("--repository", required=True)
     parser.add_argument("--url", required=True)
     parser.add_argument("--email", required=True)
+    parser.add_argument("--encoded-input", action="store_true",
+                        help="Read base64-encoded secrets to avoid terminal special-character transformations")
     args = parser.parse_args()
     if not sys.stdin.isatty():
         raise SystemExit("Interactive hidden input is required.")
     database = getpass.getpass("Database URL (hidden): ")
     password = getpass.getpass("Application login password (hidden): ")
     try:
+        if args.encoded_input:
+            database = base64.b64decode(database, validate=True).decode()
+            password = base64.b64decode(password, validate=True).decode()
         configure(args.repository, args.url, args.email, database, password)
     except Exception as exc:
         status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None

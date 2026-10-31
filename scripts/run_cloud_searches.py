@@ -5,14 +5,14 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from sqlalchemy import select, update
-from jobpilot.db import SessionLocal
-from jobpilot.models import SavedSearch
-from jobpilot.notifications import deliver_pending
-from jobpilot.search_runner import run_saved_search
 
 
 def main() -> None:
+    from sqlalchemy import select, update
+    from jobpilot.db import SessionLocal
+    from jobpilot.models import SavedSearch
+    from jobpilot.notifications import deliver_pending
+    from jobpilot.search_runner import run_saved_search
     if not os.environ.get("DATABASE_URL", "").startswith("postgresql+psycopg://"):
         raise RuntimeError("Cloud search job requires a persistent PostgreSQL DATABASE_URL")
     midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -40,4 +40,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        # A driver exception can contain fragments of a connection URL that
+        # GitHub's whole-secret masking will not recognize.
+        print(f"Cloud search failed: {type(exc).__name__}. Check database settings and app status.", flush=True)
+        raise SystemExit(1)
