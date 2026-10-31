@@ -1,0 +1,76 @@
+from contextlib import contextmanager
+from datetime import timedelta
+
+import httpx
+from pydantic import SecretStr
+from sqlalchemy import select
+
+from jobpilot import notifications
+from jobpilot.config import settings
+from jobpilot.models import Resume, SavedSearch, SearchNotification, now
+
+
+def search(db):
+    resume = Resume(variant="general", filename="test.txt", storage_key="test.txt", sha256="a" * 64)
+    db.add(resume)
+    db.flush()
+    value = SavedSearch(name="Frontend", resume_id=resume.id, filters={})
+    db.add(value)
+    db.commit()
+    return value
+
+
+def job(url="https://jobs.example/1"):
+    return {"score": 80, "company": "Example", "title": "Frontend Engineer", "location": "Remote",
+            "canonical_url": url, "eligibility": "unknown"}
+
+
+def enable(monkeypatch):
+    monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr("secret-bot-token"))
+    monkeypatch.setattr(settings(), "telegram_chat_id", "123")
+    monkeypatch.setattr(settings(), "resend_api_key", SecretStr("secret-email-token"))
+    monkeypatch.setattr(settings(), "notification_email", "owner@example.com")
+
+
+def test_new_jobs_are_deduplicated_per_channel_across_runs(db, monkeypatch):
+    enable(monkeypatch)
+    value = search(db)
+    notifications.enqueue_digest(db, value, [job(), job(), {**job("https://jobs.example/no"), "eligibility": "rejected"}])
+    db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == 2
+    notifications.enqueue_digest(db, value, [job()])
+    db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == 2
+    notifications.enqueue_digest(db, value, [job(), job("https://jobs.example/new")])
+    db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == 4
+
+
+def test_delivery_retry_redacts_secrets_and_preserves_email_idempotency(db, monkeypatch):
+    enable(monkeypatch)
+    notifications.enqueue_digest(db, search(db), [job()])
+    db.commit()
+    @contextmanager
+    def factory():
+        yield db
+    monkeypatch.setattr(notifications, "SessionLocal", factory)
+    original = httpx.Client
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"Retry-After": "500"}) if request.url.host == "api.telegram.org" else httpx.Response(200, json={"id": "sent"})
+    monkeypatch.setattr(notifications.httpx, "Client",
+                        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
+    notifications.deliver_pending()
+    rows = list(db.scalars(select(SearchNotification)))
+    telegram = next(r for r in rows if r.channel == "telegram")
+    email = next(r for r in rows if r.channel == "email")
+    assert telegram.status == "pending" and telegram.error == "HTTP 429"
+    assert "secret" not in telegram.error
+    deadline = telegram.next_attempt.replace(tzinfo=now().tzinfo)
+    assert deadline > now() + timedelta(seconds=450)
+    assert email.status == "sent"
+    assert next(r for r in calls if r.url.host == "api.resend.com").headers["Idempotency-Key"] == email.id
+    assert len(calls) == 2
+    notifications.deliver_pending()
+    assert len(calls) == 2

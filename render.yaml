@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: jobpilot
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: HOSTED_MODE
+        value: "true"
+      - key: AUTH_REQUIRED
+        value: "true"
+      - key: EMBEDDED_SEARCHES
+        value: "true"
+      - key: STORE_RESUME_FILES_IN_DB
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: API_TOKEN
+        generateValue: true
+      - key: LOGIN_USER
+        value: jobpilot
+      - key: LOGIN_PASSWORD
+        generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: NOTIFICATION_EMAIL
+        sync: false
+      - key: NOTIFICATION_FROM
+        value: JobPilot <onboarding@resend.dev>
