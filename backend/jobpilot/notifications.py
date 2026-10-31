@@ -124,3 +124,15 @@ def test_notifications(db: Session = Depends(session)) -> dict[str, int]:
                                   channel=channel, message="JobPilot · проверка уведомлений. Подключение работает."))
     db.commit()
     return {"queued": len(channels())}
+
+
+@router.post("/notifications/dispatch")
+def dispatch_notifications(db: Session = Depends(session)) -> dict[str, Any]:
+    # The daily runner can wake the web service after searching in PostgreSQL.
+    # Credentials for delivery remain only on Render.
+    for search in db.scalars(select(SavedSearch).where(
+            SavedSearch.status == "complete", SavedSearch.enabled.is_(True))):
+        enqueue_digest(db, search, search.results)
+    db.commit()
+    deliver_pending()
+    return notification_status(db)

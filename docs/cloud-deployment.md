@@ -63,11 +63,14 @@ It stays inactive until the repository variable `JOBPILOT_SCHEDULE_ENABLED`
 is set to `true`, after the database and notification secrets have been configured.
 Set the **production** GitHub environment:
 
-Secrets: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `RESEND_API_KEY`.
+Secrets: `DATABASE_URL`, `LOGIN_PASSWORD`. Delivery credentials stay on Render.
+Optional: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `RESEND_API_KEY` if delivery should also run directly in Actions.
 Variables: `NOTIFICATION_EMAIL`, `NOTIFICATION_FROM`, `PUBLIC_APP_URL`.
 
 The workflow runs daily at 00:17 UTC (03:17 Moscow), against the database directly.
-It does not keep Render artificially awake. It can also run manually from Actions.
+It then wakes the private web app once to queue and deliver digests using Render's
+notification credentials. It does not keep Render artificially awake.
+It can also run manually from Actions.
 GitHub scheduling can be delayed; this is not a precise delivery-time guarantee.
 GitHub and Neon usage must remain within the account's free quotas.
 

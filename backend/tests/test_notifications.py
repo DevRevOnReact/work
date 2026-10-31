@@ -74,3 +74,26 @@ def test_delivery_retry_redacts_secrets_and_preserves_email_idempotency(db, monk
     assert len(calls) == 2
     notifications.deliver_pending()
     assert len(calls) == 2
+
+
+def test_dispatch_queues_render_channels_and_deduplicates(db, monkeypatch):
+    from fastapi.testclient import TestClient
+    from jobpilot.api import app
+    from jobpilot.db import session
+    enable(monkeypatch)
+    value = search(db)
+    value.status = "complete"
+    value.results = [job()]
+    db.commit()
+    deliveries = []
+    monkeypatch.setattr(notifications, "deliver_pending", lambda: deliveries.append(True))
+    app.dependency_overrides[session] = lambda: db
+    try:
+        client = TestClient(app)
+        response = client.post("/notifications/dispatch")
+        assert response.status_code == 200
+        assert response.json()["counts"]["pending"] == 2
+        assert client.post("/notifications/dispatch").json()["counts"]["pending"] == 2
+        assert len(deliveries) == 2
+    finally:
+        app.dependency_overrides.clear()
