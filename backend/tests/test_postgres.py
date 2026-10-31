@@ -11,10 +11,9 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from jobpilot.config import settings
 from jobpilot.models import Application, Candidate, Control, Resume, Source
-from jobpilot.domain import Profile
 from jobpilot.services import bootstrap, ingest, queue_ready
 from jobpilot.workers import claim
-from test_domain import vacancy
+from test_domain import resume_profile, vacancy
 
 
 @pytest.mark.skipif(
@@ -49,10 +48,10 @@ def test_pg_migrations_audit_and_concurrent_claim(monkeypatch):
             resume = Resume(variant="general", filename="cv.pdf", storage_key="cv.pdf", sha256="f" * 64)
             db.add(resume)
             db.flush()
-            p.facts = Profile(full_name="Test Candidate", email="test@example.invalid",
-                              active_resume_id=resume.id, resume_filename=resume.filename,
-                              resume_text="Senior Frontend Engineer React Next.js TypeScript 5 years experience",
-                              skills=["React", "Next.js", "TypeScript"], years_experience=5).model_dump()
+            p.facts = resume_profile(
+                full_name="Test Candidate", email="test@example.invalid",
+                active_resume_id=resume.id, resume_filename=resume.filename,
+            ).model_dump()
             db.get(Control, 1).auto_apply = True
             db.get(Control, 1).min_score = 0
             source = Source(provider="ashby", board="test", company="Example")
