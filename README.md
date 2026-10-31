@@ -73,6 +73,32 @@ every company worldwide.
 
 Salary/employment filters match employer text; currencies and pay periods are not normalized. Publication-age filters exclude unknown dates. Unknown workplace format is not treated as onsite. Explicit location format wins over company-office text in a description. Results persist up to 500 entries in the selected sort order, with the full count and 20 results rendered per page.
 
+## Top vacancies and Telegram
+
+`/top` is a dedicated page for vacancies published within the last **72 hours**
+with a resume score of **60 or higher**. Each search scores this three-day window
+in addition to keeping its normal today-only results. Top entries persist across
+runs and are deduplicated by vacancy URL using the best resume score. The top
+uses each search's other filters, with its own 60-point threshold and 72-hour
+publication window. Unknown and future publication dates are excluded.
+
+Telegram receives **one message per qualifying vacancy**, including the complete
+job URL. A shared persistent key prevents re-enqueueing the same URL across
+resumes and searches. Messages wait in the durable queue, respect chat pacing and
+Telegram's `retry_after`, and expire when the vacancy leaves the 72-hour window.
+Email digests remain available. Telegram delivery is at-least-once across a crash
+after Telegram accepts a message but before the database commits the receipt.
+
+After successful CI on `main`, **Verify deployment and Telegram** waits for the
+exact Render commit, calls the idempotent deployment-test endpoint, records the
+Telegram message ID, refreshes searches to populate the top immediately and
+drains Telegram's queue. It uses the existing GitHub `LOGIN_PASSWORD` secret and
+`PUBLIC_APP_URL` variable; bot credentials remain on Render. One test message is
+sent per deployed commit. The workflow can also be dispatched manually.
+
+`python scripts/ui_top_smoke.py` verifies the dedicated route, links, pagination,
+reload, refresh and mobile layout without changing user records.
+
 ## Development checks
 
 ```sh

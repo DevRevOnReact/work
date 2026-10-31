@@ -34,4 +34,8 @@ export type Company = {
   id: string; name: string; careers_url: string; sources: Source[]; contacts: Lead[];
   signals: {kind: string; url: string; note: string; location: string; country?: string; checked_at: string; confidence: string; rank?: number}[];
 };
-export type PageName = "search" | "companies" | "sources" | "resumes";
+export type TopVacancy = Pick<JobResult, "title" | "company" | "location" | "salary" | "provider" | "canonical_url" | "published_at" | "score" | "eligibility"> & {
+  id: string; resume_filename: string; search_name: string;
+};
+export type TopVacancies = {window_hours: number; min_score: number; total: number; items: TopVacancy[]};
+export type PageName = "search" | "top" | "companies" | "sources" | "resumes";

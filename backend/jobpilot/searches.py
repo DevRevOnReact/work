@@ -134,12 +134,19 @@ def published_today(job: JobInput, at: datetime | None = None) -> bool:
 
 
 def make_results(db: Session, search: SavedSearch, jobs: list[JobInput], *,
-                 today_only: bool = False, at: datetime | None = None) -> tuple[list[dict[str, Any]], int]:
+                 today_only: bool = False, at: datetime | None = None, since: datetime | None = None,
+                 filters_override: SearchFilters | None = None, limit: int | None = 500) -> tuple[list[dict[str, Any]], int]:
     profile = search_profile(db, search.resume_id)
-    filters = SearchFilters.model_validate(search.filters)
+    filters = filters_override or SearchFilters.model_validate(search.filters)
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for job in jobs:
+        if since:
+            if not job.published_at:
+                continue
+            published = job.published_at.replace(tzinfo=UTC) if job.published_at.tzinfo is None else job.published_at
+            if not since <= published <= (at or datetime.now(UTC)):
+                continue
         if today_only and not published_today(job, at):
             continue
         if job.canonical_url in seen:
@@ -157,4 +164,4 @@ def make_results(db: Session, search: SavedSearch, jobs: list[JobInput], *,
         results.sort(key=lambda item: (item["company"].casefold(), -item["score"], item["canonical_url"]))
     else:
         results.sort(key=lambda item: (-item["score"], item["company"].casefold(), item["title"].casefold()))
-    return results[:500], len(results)
+    return results[:limit] if limit is not None else results, len(results)

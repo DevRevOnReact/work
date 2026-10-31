@@ -9,7 +9,7 @@ from .company_api import router as company_router
 from .config import settings
 from .db import SessionLocal, session
 from .history_api import router as history_router
-from .http import serialize as serialize
+from .http import authenticate, serialize as serialize
 from .job_api import router as job_router
 from .linkedin_api import router as linkedin_router
 from .profile_api import router as profile_router
@@ -20,6 +20,7 @@ from .services import (
 )
 from .source_api import router as source_router
 from .notifications import router as notification_router
+from .top_vacancies import router as top_router
 
 
 @asynccontextmanager
@@ -77,3 +78,10 @@ app.include_router(search_router)
 app.include_router(linkedin_router)
 app.include_router(company_router)
 app.include_router(notification_router)
+app.include_router(top_router)
+
+
+@app.get("/release", dependencies=[Depends(authenticate)])
+def release() -> dict[str, str | int]:
+    import os
+    return {"commit": os.environ.get("RENDER_GIT_COMMIT", "local"), "top_window_hours": 72, "top_min_score": 60}

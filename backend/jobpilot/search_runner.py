@@ -113,14 +113,22 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             if not search or search.status != "running":
                 return
             results, count = make_results(db, search, inputs, today_only=True, at=checked_at)
+            report("scoring", "Формируем топ за последние 72 часа · оценка от 60")
+            top_filters = SearchFilters.model_validate(search.filters).model_copy(
+                update={"posted_days": 0, "min_score": 60, "sort": "score"})
+            top_results, _ = make_results(db, search, inputs, at=checked_at,
+                                         since=checked_at - timedelta(days=3), filters_override=top_filters, limit=None)
+            from .top_vacancies import save_top_vacancies
+            save_top_vacancies(db, search, top_results)
             search.results, search.result_count = results, count
             search.errors, search.status, search.completed_at = errors, "complete", now()
             search.progress = advance(progress, "complete", f"Готово: {count} подходящих вакансий за сегодня",
                                       matched=count)
-            from .notifications import enqueue_digest
+            from .notifications import enqueue_digest, enqueue_top_telegram
             try:
                 with db.begin_nested():
                     enqueue_digest(db, search, results)
+                    enqueue_top_telegram(db, search.id, top_results)
             except Exception:
                 import logging
                 logging.getLogger(__name__).error("Unable to queue search notifications")

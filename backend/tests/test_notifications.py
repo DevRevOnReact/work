@@ -22,7 +22,7 @@ def search(db):
 
 def job(url="https://jobs.example/1"):
     return {"score": 80, "company": "Example", "title": "Frontend Engineer", "location": "Remote",
-            "canonical_url": url, "eligibility": "unknown"}
+            "canonical_url": url, "eligibility": "unknown", "published_at": now().isoformat()}
 
 
 def enable(monkeypatch):
@@ -32,23 +32,26 @@ def enable(monkeypatch):
     monkeypatch.setattr(settings(), "notification_email", "owner@example.com")
 
 
-def test_new_jobs_are_deduplicated_per_channel_across_runs(db, monkeypatch):
+def test_email_digests_are_deduplicated_and_telegram_uses_individual_top_jobs(db, monkeypatch):
     enable(monkeypatch)
     value = search(db)
     notifications.enqueue_digest(db, value, [job(), job(), {**job("https://jobs.example/no"), "eligibility": "rejected"}])
     db.commit()
-    assert len(list(db.scalars(select(SearchNotification)))) == 2
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
     notifications.enqueue_digest(db, value, [job()])
     db.commit()
-    assert len(list(db.scalars(select(SearchNotification)))) == 2
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
     notifications.enqueue_digest(db, value, [job(), job("https://jobs.example/new")])
     db.commit()
-    assert len(list(db.scalars(select(SearchNotification)))) == 4
+    assert len(list(db.scalars(select(SearchNotification)))) == 2
+    assert all(row.channel == "email" for row in db.scalars(select(SearchNotification)))
 
 
 def test_delivery_retry_redacts_secrets_and_preserves_email_idempotency(db, monkeypatch):
     enable(monkeypatch)
-    notifications.enqueue_digest(db, search(db), [job()])
+    value = search(db)
+    notifications.enqueue_digest(db, value, [job()])
+    notifications.enqueue_top_telegram(db, value.id, [job()])
     db.commit()
     @contextmanager
     def factory():
@@ -84,6 +87,8 @@ def test_dispatch_queues_render_channels_and_deduplicates(db, monkeypatch):
     value = search(db)
     value.status = "complete"
     value.results = [job()]
+    from jobpilot.top_vacancies import save_top_vacancies
+    save_top_vacancies(db, value, value.results)
     db.commit()
     deliveries = []
     monkeypatch.setattr(notifications, "deliver_pending", lambda: deliveries.append(True))

@@ -190,9 +190,24 @@ class SearchNotification(Base):
     attempts: Mapped[int] = mapped_column(default=0)
     next_attempt: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     error: Mapped[str | None] = mapped_column(Text)
+    provider_message_id: Mapped[str | None] = mapped_column(String(120))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class NotificationSeen(Base):
     __tablename__ = "notification_seen"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class TopVacancy(Base):
+    __tablename__ = "top_vacancies"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    resume_id: Mapped[str] = mapped_column(String(36), index=True)
+    search_id: Mapped[str] = mapped_column(String(36))
+    resume_filename: Mapped[str] = mapped_column(String(255))
+    search_name: Mapped[str] = mapped_column(String(120))
+    score: Mapped[int] = mapped_column(Integer, index=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
