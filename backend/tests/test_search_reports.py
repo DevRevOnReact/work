@@ -44,7 +44,7 @@ def test_cloud_run_queues_top_and_report_without_bot_secrets_and_reports_repeats
     db.add(value); db.commit()
     value.filters = {"min_score": 95}
     db.add(Source(provider="ashby", company="Acme", board="acme")); db.commit()
-    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 80, "eligibility": "unknown"})
+    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 80, "eligibility": "eligible"})
     class Adapter:
         def __init__(self, client): pass
         async def fetch(self, *args):
@@ -73,6 +73,22 @@ def test_failed_search_reports_failure_instead_of_old_result_count(db, monkeypat
     assert value.status == "failed" and value.result_count == 99
     assert "Ошибка: не удалось" in message and "Предыдущие результаты сохранены" in message
     assert "99" not in message and "Нет включённых источников" in message
+
+
+def test_unknown_geography_is_counted_for_review_but_not_queued_as_a_top_job(db, monkeypatch):
+    first, _ = setup_resumes(db)
+    value = SavedSearch(name="Frontend", resume_id=first.id, filters={})
+    db.add_all([value, Source(provider="ashby", company="Acme", board="acme")]); db.commit()
+    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 90, "eligibility": "unknown"})
+    class Adapter:
+        def __init__(self, client): pass
+        async def fetch(self, *args): return [vacancy()]
+    run_saved_search(value.id, sessionmaker(db.bind, expire_on_commit=False), {"ashby": Adapter}, False,
+                     enqueue_without_credentials=True)
+    db.refresh(value)
+    assert value.progress["top_matched"] == 0 and value.progress["top_review"] == 1
+    assert value.progress["telegram_queued"] == 0 and len(reports(db)) == 1
+    assert "Ещё требуют проверки географии: 1" in reports(db)[0].message
 
 
 def test_partial_source_failure_keeps_matching_count_and_warning(db, monkeypatch):

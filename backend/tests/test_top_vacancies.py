@@ -69,7 +69,7 @@ def test_search_stores_three_day_top_while_daily_results_stay_today(db, monkeypa
     first, _ = setup_resumes(db)
     value = SavedSearch(name="Test", resume_id=first.id, filters={"posted_days": 1, "min_score": 95})
     db.add_all([value, Source(provider="ashby", board="acme", company="Acme")]); db.commit()
-    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 80, "eligibility": "unknown"})
+    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 80, "eligibility": "eligible"})
     class Adapter:
         def __init__(self, client): pass
         async def fetch(self, *args):

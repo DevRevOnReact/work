@@ -22,7 +22,7 @@ def search(db):
 
 def job(url="https://jobs.example/1"):
     return {"score": 80, "company": "Example", "title": "Frontend Engineer", "location": "Remote",
-            "canonical_url": url, "eligibility": "unknown", "published_at": now().isoformat()}
+            "canonical_url": url, "eligibility": "eligible", "published_at": now().isoformat()}
 
 
 def enable(monkeypatch):

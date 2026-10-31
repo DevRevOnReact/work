@@ -122,6 +122,8 @@ def enqueue_search_report(db: Session, search: SavedSearch, *,
                   f"Подошло в топ за 72 часа (от 60/100): {top_count}."]
         if not top_count:
             lines.append("Подходящих вакансий не найдено.")
+        if progress.get("top_review"):
+            lines.append(f"Ещё требуют проверки географии: {progress['top_review']} (в топ и бот не отправлены).")
         queued = progress.get("telegram_queued")
         if queued is None:
             lines.append("Не удалось поставить уведомления о вакансиях в очередь.")

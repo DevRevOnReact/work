@@ -83,6 +83,8 @@ gap, unconfirmed Staff/Principal scope and rejected geography block top delivery
 regardless of the professional score. Optional skills and explicit alternatives
 are handled separately. Task concepts recognize Russian and English wording;
 this is an explainable rule system, not an external semantic model.
+Unconfirmed geography remains visible in ordinary searches for review; only
+confirmed compatible geography is eligible for the automatic top and Telegram.
 
 `search_locations` stores explicitly confirmed alternative locations. Each is
 checked independently; it never declares work authorization. Startup reparses

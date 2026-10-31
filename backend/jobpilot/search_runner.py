@@ -120,12 +120,14 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
                 update={"posted_days": 0, "min_score": 60, "sort": "score"})
             top_results, _ = make_results(db, search, inputs, at=checked_at,
                                          since=checked_at - timedelta(days=3), filters_override=top_filters, limit=None)
-            from .top_vacancies import save_top_vacancies
+            from .top_vacancies import qualifies, save_top_vacancies
+            review_count = sum(job.get("eligibility") == "unknown" for job in top_results)
+            top_results = [job for job in top_results if qualifies(job, checked_at)]
             save_top_vacancies(db, search, top_results)
             search.results, search.result_count = results, count
             search.errors, search.status, search.completed_at = errors, "complete", now()
             search.progress = advance(progress, "complete", f"Готово: {count} подходящих вакансий за сегодня",
-                                      matched=count, top_matched=len(top_results))
+                                      matched=count, top_matched=len(top_results), top_review=review_count)
             from .notifications import enqueue_digest, enqueue_top_telegram, enqueue_search_report
             try:
                 with db.begin_nested():

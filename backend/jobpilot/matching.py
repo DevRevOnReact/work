@@ -9,10 +9,10 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from .domain import (DOMAIN_ALIASES, SKILL_ALIASES, JobInput, Profile, _contains,
+from .domain import (DOMAIN_ALIASES, MATCHING_VERSION, SKILL_ALIASES, JobInput, Profile, _contains,
                      _detected, _eligibility, _salary_range, _terms, profile_fingerprint)
 
-SCORING_VERSION = "matching-v2"
+SCORING_VERSION = MATCHING_VERSION
 WEIGHTS = {"stack": 40, "responsibilities": 25, "role": 15, "experience": 10, "domain": 10}
 LABELS = {"stack": "Стек и обязательные технологии", "role": "Направление роли",
           "experience": "Продолжительность опыта", "domain": "Предметная область",
@@ -209,6 +209,9 @@ def evaluate_match(job: JobInput, profile: Profile, at: datetime | None = None) 
     if re.search(r"\b(?:staff|principal|director|head of)\b", job.title, re.I) and not re.search(
             r"\b(?:staff|principal|director|head of)\b", header, re.I):
         blockers.append("Уровень Staff/Principal/руководителя не подтверждён резюме")
+    if re.search(r"engineering manager|менеджер.*разработ|руководитель.*отдел", job.title, re.I) and not re.search(
+            r"engineering manager|менеджер.*разработ|руководитель.*отдел", header, re.I):
+        blockers.append("Опыт управления инженерной командой не подтверждён резюме")
     task_required, task_actual = _task_set(job.description), _task_set(resume)
     task_ratio = _ratio(task_required, task_actual) if task_required else _ratio(_terms(job.description), _terms(resume))
     domains, domain_actual = _detected(text, DOMAIN_ALIASES), _detected(resume, DOMAIN_ALIASES)

@@ -28,7 +28,7 @@ def qualifies(job: dict[str, Any], at: datetime | None = None) -> bool:
     current = at or now()
     published = publication(job.get("published_at"))
     return bool(published and current - timedelta(hours=WINDOW_HOURS) <= published <= current
-                and job.get("score", 0) >= MIN_SCORE and job.get("eligibility") != "rejected"
+                and job.get("score", 0) >= MIN_SCORE and job.get("eligibility") == "eligible"
                 and job.get("explanation", {}).get("recommendable", True)
                 and job.get("canonical_url", "").startswith("https://"))
 

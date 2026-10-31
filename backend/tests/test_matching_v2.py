@@ -96,6 +96,19 @@ def test_relocation_preference_never_creates_work_authorization():
     assert result["eligibility"] == "unknown"
 
 
+def test_unconfirmed_geography_stays_in_search_but_never_in_automatic_top():
+    job, result = result_for("React TypeScript. 5 years experience.", location="Paris")
+    assert result["eligibility"] == "unknown" and matches(job, SearchFilters(min_score=60), result)
+    assert not qualifies({**job.model_dump(mode="json"), "score": result["score"],
+                          "eligibility": result["eligibility"], "explanation": result})
+
+
+def test_people_management_is_not_inferred_from_mentoring():
+    _, result = result_for("React TypeScript. Mentor engineers and conduct reviews.",
+                           title="Software Engineering Manager (Frontend)")
+    assert not result["recommendable"]
+
+
 def test_unknown_salary_education_language_and_date_do_not_dilute_professional_score():
     job, result = result_for("React TypeScript. Build CRM dashboards and forms. 5 years experience.")
     other = evaluate(job.model_copy(update={"salary": "competitive", "published_at": None}), frontend())
@@ -156,6 +169,8 @@ def test_profile_update_preserves_old_artifact_and_encodes_untrusted_filename():
     module = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/prepare_search_profile_update.py"))
     content = pdf_bytes()
     statements = module["prepare"](content, "cv';unsafe.pdf", "a" * 64, ["Serbia", "Georgia"])
+    from sqlalchemy import text
+    assert all(not text(sql).compile().params for sql in statements)
     assert statements == module["prepare"](content, "cv';unsafe.pdf", "a" * 64, ["Serbia", "Georgia"])
     assert not any("cv';unsafe" in sql or "DELETE FROM" in sql for sql in statements)
     assert any("INSERT INTO resume_files" in sql and "ON CONFLICT" in sql for sql in statements)

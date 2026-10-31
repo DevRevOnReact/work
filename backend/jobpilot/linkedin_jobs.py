@@ -15,7 +15,7 @@ from .domain import JobInput
 from .http import authenticate
 from .models import LinkedInCandidate, SavedSearch, now
 from .searches import SearchFilters, make_results
-from .top_vacancies import MIN_SCORE, WINDOW_HOURS, save_top_vacancies
+from .top_vacancies import MIN_SCORE, WINDOW_HOURS, qualifies, save_top_vacancies
 
 router = APIRouter(dependencies=[Depends(authenticate)])
 
@@ -93,13 +93,16 @@ def process_candidates(session_factory: Any = SessionLocal) -> None:
                     if best is not None and best_search is not None:
                         row.result = {"score": best["score"], "search_id": best_search.id,
                                       "date_evidence": item.date_evidence}
-                        if best["score"] >= MIN_SCORE:
+                        if qualifies(best):
                             save_top_vacancies(db, best_search, [best])
                             from .notifications import enqueue_top_telegram
                             enqueue_top_telegram(db, best_search.id, [best])
                             row.status = "accepted"
-                        else:
+                        elif best["score"] < MIN_SCORE:
                             row.status = "below_threshold"
+                        else:
+                            row.status = "needs_review"
+                            row.result = {**row.result, "reason": "Доступность из выбранных стран не подтверждена"}
                     else:
                         row.status, row.result = "excluded", {"reason": "Нет подходящего активного поиска/резюме"}
             except ValueError:

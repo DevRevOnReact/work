@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+MATCHING_VERSION = "matching-v2.1"
 
 class Profile(BaseModel):
     full_name: str | None = None
@@ -67,7 +68,7 @@ def transition_allowed(before: str, after: str, has_intent: bool = False) -> boo
 
 def profile_fingerprint(profile: Profile) -> str:
     """Invalidate persisted scores when candidate facts or the active resume change."""
-    return hashlib.sha256(("matching-v2:" + profile.model_dump_json()).encode()).hexdigest()
+    return hashlib.sha256((MATCHING_VERSION + ":" + profile.model_dump_json()).encode()).hexdigest()
 
 
 def _contains(term: str, text: str) -> bool:
