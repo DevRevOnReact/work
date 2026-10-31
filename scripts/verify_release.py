@@ -108,7 +108,7 @@ def main() -> None:
         with SessionLocal() as db:
             ids = list(db.scalars(select(SavedSearch.id).where(SavedSearch.enabled.is_(True))))
         for search_id in ids:
-            run_saved_search(search_id)
+            run_saved_search(search_id, enqueue_without_credentials=True)
             with SessionLocal() as db:
                 search = db.get(SavedSearch, search_id)
                 if search and search.status == 'failed':

@@ -13,12 +13,14 @@ from .models import SavedSearch, Source, now
 from .progress import advance
 from .searches import SearchFilters, make_results, phrases, published_today
 from .sources import ADAPTERS
+from .top_vacancies import publication
 
 _cache: OrderedDict[tuple[str, str, str], tuple[float, list[Any]]] = OrderedDict()
 
 
 def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
-                     adapters: Any = ADAPTERS, use_cache: bool = True) -> None:
+                     adapters: Any = ADAPTERS, use_cache: bool = True, *,
+                     enqueue_without_credentials: bool = False) -> None:
     started = now()
     progress = advance({}, "starting", "Начинаем поиск вакансий за сегодня", done=0, total=0)
     with session_factory() as db:
@@ -123,15 +125,18 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             search.results, search.result_count = results, count
             search.errors, search.status, search.completed_at = errors, "complete", now()
             search.progress = advance(progress, "complete", f"Готово: {count} подходящих вакансий за сегодня",
-                                      matched=count)
-            from .notifications import enqueue_digest, enqueue_top_telegram
+                                      matched=count, top_matched=len(top_results))
+            from .notifications import enqueue_digest, enqueue_top_telegram, enqueue_search_report
             try:
                 with db.begin_nested():
                     enqueue_digest(db, search, results)
-                    enqueue_top_telegram(db, search.id, top_results)
+                    queued = enqueue_top_telegram(db, search.id, top_results,
+                                                  enqueue_without_credentials=enqueue_without_credentials)
+                    search.progress = {**search.progress, "telegram_queued": queued}
             except Exception:
                 import logging
                 logging.getLogger(__name__).error("Unable to queue search notifications")
+            enqueue_search_report(db, search, enqueue_without_credentials=enqueue_without_credentials)
             db.commit()
     except Exception as exc:
         message = (str(exc) if isinstance(exc, ValueError) else
@@ -141,4 +146,8 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             db.execute(update(SavedSearch).where(SavedSearch.id == search_id, SavedSearch.started_at == started).values(
                 errors=errors + [message], status="failed", completed_at=now(),
                 progress=advance(progress, "failed", message, "error")))
+            search = db.get(SavedSearch, search_id, populate_existing=True)
+            if search and publication(search.started_at) == publication(started):
+                from .notifications import enqueue_search_report
+                enqueue_search_report(db, search, enqueue_without_credentials=enqueue_without_credentials)
             db.commit()

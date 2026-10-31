@@ -58,7 +58,7 @@ prevent repeated alerts for the same search and channel. Pending deliveries and 
 state survive restarts. Resend delivery uses an idempotency key. Telegram does not
 offer an idempotency key, so an interrupted network response can rarely cause a repeat.
 
-## Daily searches while Render sleeps
+## Three-hour searches while Render sleeps
 
 Enable `.github/workflows/search-daily.yml` on the repository's default branch.
 It stays inactive until the repository variable `JOBPILOT_SCHEDULE_ENABLED`
@@ -69,16 +69,21 @@ Secrets: `DATABASE_URL`, `LOGIN_PASSWORD`. Delivery credentials stay on Render.
 Optional: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `RESEND_API_KEY` if delivery should also run directly in Actions.
 Variables: `NOTIFICATION_EMAIL`, `NOTIFICATION_FROM`, `PUBLIC_APP_URL`.
 
-The workflow runs daily at 00:17 UTC (03:17 Moscow), against the database directly.
-It then wakes the private web app once to queue and deliver digests using Render's
+The workflow runs every three hours at minute 17 (00:17, 03:17, … UTC;
+03:17, 06:17, … Moscow), against the database directly.
+It then wakes the private web app to deliver vacancies and search reports using Render's
 notification credentials. It does not keep Render artificially awake.
 It can also run manually from Actions.
 GitHub scheduling can be delayed; this is not a precise delivery-time guarantee.
 GitHub and Neon usage must remain within the account's free quotas.
 
-The cloud web runtime runs searches manually; automatic daily execution runs in
+Each completed or failed search queues a named Telegram report, including zero
+matches, the number of top matches over 72 hours and newly queued alerts. A queued
+alert is not a delivery receipt. Reports are also dispatched after search failures.
+
+The cloud web runtime runs searches manually; automatic execution runs in
 GitHub Actions (`AUTOMATIC_SEARCH_SCHEDULE=false` on Render). Native local servers
-keep their built-in daily schedule. Both paths atomically claim saved searches. A web restart leaves a live
+keep their built-in three-hour schedule. Both paths atomically claim saved searches. A web restart leaves a live
 cloud run alone; runs older than 20 minutes can be recovered.
 
 ## Durability and limits

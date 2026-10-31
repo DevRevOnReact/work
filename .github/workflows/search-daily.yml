@@ -13,7 +13,7 @@ jobs:
   search:
     if: vars.JOBPILOT_SCHEDULE_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: production
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -32,5 +32,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.runtime.lock
       - run: pip install -r backend/requirements.runtime.lock && pip install --no-deps -e backend
-      - run: python scripts/run_cloud_searches.py
-      - run: python scripts/dispatch_cloud_notifications.py
+      - name: Search vacancies and queue reports
+        run: python scripts/run_cloud_searches.py
+      - name: Deliver vacancies and reports even when a search fails
+        if: ${{ !cancelled() }}
+        run: python scripts/dispatch_cloud_notifications.py

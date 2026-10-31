@@ -11,22 +11,27 @@ def main() -> None:
     from sqlalchemy import select, update
     from jobpilot.db import SessionLocal
     from jobpilot.models import SavedSearch
-    from jobpilot.notifications import deliver_pending
+    from jobpilot.notifications import deliver_pending, enqueue_search_report
     from jobpilot.search_runner import run_saved_search
     from jobpilot.schedule import due_searches
     from jobpilot.progress import advance
     if not os.environ.get("DATABASE_URL", "").startswith("postgresql+psycopg://"):
         raise RuntimeError("Cloud search job requires a persistent PostgreSQL DATABASE_URL")
     with SessionLocal() as db:
-        db.execute(update(SavedSearch).where(
+        recovered = list(db.scalars(update(SavedSearch).where(
             SavedSearch.status.in_(["queued", "running"]),
             SavedSearch.started_at < datetime.now(timezone.utc) - timedelta(minutes=20),
         ).values(status="failed", completed_at=datetime.now(timezone.utc), errors=["Предыдущий запуск прерван"],
-                 progress=advance({}, "failed", "Предыдущий запуск прерван", "error")))
+                 progress=advance({}, "failed", "Предыдущий запуск прерван", "error"))
+            .returning(SavedSearch.id)))
+        for search_id in recovered:
+            search = db.get(SavedSearch, search_id)
+            if search:
+                enqueue_search_report(db, search, enqueue_without_credentials=True)
         db.commit()
         ids = due_searches(db)
     for search_id in ids:
-        run_saved_search(search_id)
+        run_saved_search(search_id, enqueue_without_credentials=True)
         with SessionLocal() as db:
             search = db.get(SavedSearch, search_id)
             print(f"{search_id}: {search.status if search else 'missing'}", flush=True)

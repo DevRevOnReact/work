@@ -5,6 +5,7 @@ import re
 import time
 from datetime import timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -93,6 +94,60 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
                                   error=None if len(message) <= 4096 else "Ссылка превышает лимит сообщения Telegram"))
         queued += 1
     return queued
+
+
+def enqueue_search_report(db: Session, search: SavedSearch, *,
+                          enqueue_without_credentials: bool = False) -> SearchNotification | None:
+    """One durable report per finished attempt, including empty and failed searches."""
+    if not enqueue_without_credentials and "telegram" not in channels():
+        return None
+    if search.status not in {"complete", "failed"} or not search.started_at or not search.completed_at:
+        return None
+    started = publication(search.started_at)
+    completed = publication(search.completed_at)
+    assert started is not None and completed is not None
+    identity = hashlib.sha256(f"telegram-search-report-v1:{search.id}:{started.isoformat()}".encode()).hexdigest()
+    existing = db.get(SearchNotification, identity)
+    if existing is not None:
+        return existing
+    progress = search.progress or {}
+    lines = ["JobPilot · отчёт поиска · топ за 3 дня", search.name[:120],
+             completed.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК")]
+    if search.status == "failed":
+        lines += ["Ошибка: не удалось завершить поиск.", "Предыдущие результаты сохранены; это не новый результат."]
+    else:
+        top_count = progress.get("top_matched", 0)
+        lines += ["Завершён с ошибками отдельных источников." if search.errors else "Поиск завершён.",
+                  f"Получено вакансий из источников: {progress.get('fetched', 0)}.",
+                  f"Подошло в топ за 72 часа (от 60/100): {top_count}."]
+        if not top_count:
+            lines.append("Подходящих вакансий не найдено.")
+        queued = progress.get("telegram_queued")
+        if queued is None:
+            lines.append("Не удалось поставить уведомления о вакансиях в очередь.")
+        else:
+            lines.append(f"Новых уведомлений о вакансиях в очереди Telegram: {queued}.")
+            if top_count and not queued:
+                lines.append("Новых вакансий для отправки нет: найденные уже были в очереди.")
+        lines.append("В очереди — ещё не подтверждение доставки вакансий.")
+    if progress.get("total"):
+        lines.append(f"Источников обработано: {progress.get('done', 0)}/{progress['total']}.")
+    if search.errors:
+        lines.append(f"Ошибок: {len(search.errors)}.")
+        for error in search.errors[:3]:
+            detail = str(error)
+            for secret in (settings().telegram_bot_token.get_secret_value(), settings().database_url,
+                           settings().api_token.get_secret_value(), settings().resend_api_key.get_secret_value()):
+                if secret:
+                    detail = detail.replace(secret, "[SECRET]")
+            detail = re.sub(r"(?:https?|postgresql(?:\+psycopg)?|sqlite)://\S+", "[URL]", detail)
+            lines.append("• " + " ".join(detail.split())[:160])
+    if settings().public_app_url:
+        lines.append(settings().public_app_url.rstrip("/") + "/top")
+    item = SearchNotification(id=identity, search_id=search.id, channel="telegram", message="\n".join(lines))
+    db.add(item)
+    db.flush()
+    return item
 
 
 def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) -> None:

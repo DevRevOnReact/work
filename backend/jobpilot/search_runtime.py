@@ -25,9 +25,15 @@ class SearchRuntime:
         # A stopped process has no remaining local tasks. Preserve old results.
         with SessionLocal() as db:
             stale = (SavedSearch.started_at < now() - timedelta(minutes=20)) if settings().hosted_mode else true()
-            db.execute(update(SavedSearch).where(SavedSearch.status.in_(["queued", "running"]), stale).values(
+            recovered = list(db.scalars(update(SavedSearch).where(SavedSearch.status.in_(["queued", "running"]), stale).values(
                 status="failed", completed_at=now(), errors=["Локальный процесс перезапущен; запустите поиск снова"],
-                progress=advance({}, "failed", "Процесс перезапущен; предыдущий поиск прерван", "error")))
+                progress=advance({}, "failed", "Процесс перезапущен; предыдущий поиск прерван", "error"))
+                .returning(SavedSearch.id)))
+            from .notifications import enqueue_search_report
+            for search_id in recovered:
+                search = db.get(SavedSearch, search_id)
+                if search:
+                    enqueue_search_report(db, search)
             db.commit()
         self.task = asyncio.create_task(self.schedule())
 

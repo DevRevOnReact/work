@@ -89,6 +89,15 @@ Telegram's `retry_after`, and expire when the vacancy leaves the 72-hour window.
 Email digests remain available. Telegram delivery is at-least-once across a crash
 after Telegram accepts a message but before the database commits the receipt.
 
+Every finished search also queues a Telegram report, including when it finds no
+matches or fails. The report shows the attempt time in Moscow, fetched vacancies,
+72-hour top matches, newly queued vacancy alerts and source errors. Queue counts
+are explicitly distinguished from confirmed delivery. One report is stored per
+search attempt; a later attempt gets its own report even if the results repeat.
+The cloud runner writes reports and alerts directly to the database without bot
+credentials, then wakes Render for delivery. The delivery step also runs after a
+search failure. Each enabled saved search has its own named report.
+
 After successful CI on `main`, **Verify deployment and Telegram** waits for the
 exact Render commit, calls the idempotent deployment-test endpoint, records the
 Telegram message ID, refreshes searches to populate the top immediately and
@@ -120,6 +129,10 @@ of at least 60 enter the top and the existing Telegram outbox; messages include
 a short description and the complete LinkedIn URL. `/linkedin/jobs/status`
 reports processing counts behind the same authentication as other app APIs.
 The normal hosted employer-board schedule remains independent of this heartbeat.
+The heartbeat also queues one report per research run, including empty or partial
+checks, using `scripts/prepare_linkedin_report.py`. Its counts must come from the
+actual check and database processing state; pending candidates are not reported
+as delivered. The same run timestamp makes retries idempotent.
 
 ## Development checks
 
