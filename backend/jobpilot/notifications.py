@@ -146,10 +146,58 @@ def enqueue_search_report(db: Session, search: SavedSearch, *,
             lines.append("• " + " ".join(detail.split())[:160])
     if settings().public_app_url:
         lines.append(settings().public_app_url.rstrip("/") + "/top")
-    item = SearchNotification(id=identity, search_id=search.id, channel="telegram", message="\n".join(lines))
+    item = SearchNotification(id=identity, search_id=search.id, channel="telegram", message="\n".join(lines),
+                              next_attempt=now() + timedelta(minutes=15))
     db.add(item)
     db.flush()
     return item
+
+
+def combine_search_reports(db: Session) -> None:
+    """Collapse finished searches from one run into a single Telegram message."""
+    reports = list(db.scalars(select(SearchNotification).where(
+        SearchNotification.channel == "telegram", SearchNotification.status == "pending",
+        SearchNotification.message.like("JobPilot · отчёт поиска · топ за 3 дня%"),
+    ).order_by(SearchNotification.created_at, SearchNotification.id)))
+    if len(reports) < 2:
+        return
+    groups: list[list[SearchNotification]] = []
+    for report in reports:
+        if not groups or publication(report.created_at) - publication(groups[-1][-1].created_at) > timedelta(hours=1):
+            groups.append([report])
+        else:
+            groups[-1].append(report)
+    for group in groups:
+        if len(group) < 2:
+            continue
+        lines = ["JobPilot · общий отчёт поиска · топ за 3 дня",
+                 f"Поисков: {len(group)}. Результаты по резюме:"]
+        for report in group:
+            parts = report.message.splitlines()
+            name = parts[1] if len(parts) > 1 else "Поиск"
+            count = next((part.split(": ", 1)[1] for part in parts
+                          if part.startswith("Подошло в топ за 72 часа")), None)
+            review = next((part.split(": ", 1)[1].split(" ", 1)[0] for part in parts
+                           if part.startswith("Ещё требуют проверки географии")), None)
+            status = "ошибка поиска" if any("Ошибка: не удалось" in part for part in parts) else (
+                "ошибки источников" if any("Завершён с ошибками" in part for part in parts) else "готово")
+            summary = f"• {name}: {count or status}"
+            if count is not None and status != "готово":
+                summary += f" ({status})"
+            if review:
+                summary += f"; география на проверке: {review}"
+            lines.append(summary)
+        queued = sum(int(match.group(1)) for report in group
+                     if (match := re.search(r"Новых уведомлений о вакансиях в очереди Telegram: (\d+)", report.message)))
+        lines.append(f"Новых карточек вакансий в очереди: {queued}.")
+        lines.append("Очередь не подтверждает доставку.")
+        if settings().public_app_url:
+            lines.append(settings().public_app_url.rstrip("/") + "/top")
+        anchor = group[0]
+        anchor.message = "\n".join(lines)
+        anchor.next_attempt = max(publication(report.next_attempt) for report in group)
+        for duplicate in group[1:]:
+            duplicate.status = "superseded"
 
 
 def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) -> None:
@@ -160,6 +208,8 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
         if db.bind is not None and db.bind.dialect.name == "postgresql":
             if not db.scalar(text("SELECT pg_try_advisory_xact_lock(804224)")):
                 return
+        if only_ids is None:
+            combine_search_reports(db)
         query = select(SearchNotification).where(
             SearchNotification.status == "pending",
             (SearchNotification.next_attempt <= now()) | (SearchNotification.expires_at <= now()),

@@ -36,6 +36,29 @@ def test_report_is_once_per_attempt_including_zero_results(db, monkeypatch):
     assert len(reports(db)) == 2
 
 
+def test_finished_resume_reports_are_combined_before_delivery(db, monkeypatch):
+    enable(monkeypatch)
+    first = search(db)
+    second = search(db)
+    second.name = "Другой профиль"
+    for value, count in ((first, 2), (second, 0)):
+        value.status = "complete"
+        value.started_at, value.completed_at = now() - timedelta(minutes=2), now()
+        value.progress = {"top_matched": count, "telegram_queued": count}
+        report = notifications.enqueue_search_report(db, value)
+        report.next_attempt = now() - timedelta(seconds=1)
+    db.commit()
+    notifications.combine_search_reports(db)
+    db.commit()
+    rows = list(db.scalars(select(SearchNotification)))
+    pending = [row for row in rows if row.status == "pending"]
+    assert len(pending) == 1
+    assert "Поисков: 2" in pending[0].message
+    assert "Другой профиль" in pending[0].message
+    assert "Новых карточек вакансий в очереди: 2" in pending[0].message
+    assert len([row for row in rows if row.status == "superseded"]) == 1
+
+
 def test_cloud_run_queues_top_and_report_without_bot_secrets_and_reports_repeats(db, monkeypatch):
     monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr(""))
     monkeypatch.setattr(settings(), "telegram_chat_id", "")
