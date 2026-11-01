@@ -206,10 +206,17 @@ def add_manual_job(body: ManualJobInput, db: Session = Depends(session)) -> dict
 @router.post("/jobs/{job_id}/action")
 def job_action(job_id: str, body: JobAction, db: Session = Depends(session)) -> dict[str, Any]:
     if body.action in {"apply", "retry"}:
+        from .automation import detail, request_application
+        job = db.get(Job, job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
         try:
-            from .workers import apply
-        except ImportError as exc:
-            raise HTTPException(503, "Отправка откликов не установлена в локальном режиме поиска") from exc
+            application = request_application(db, job)
+            db.commit()
+            return detail(db, application)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(409, str(exc)) from exc
     job = db.get(Job, job_id)
     a = db.scalar(select(Application).where(Application.job_id == job_id).with_for_update())
     if not job or not a:
@@ -253,13 +260,6 @@ def job_action(job_id: str, body: JobAction, db: Session = Depends(session)) -> 
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    if body.action in {"apply", "retry"}:
-        try:
-            apply.delay(a.id)
-        except Exception:
-            # READY is durable; the scheduler will dispatch it after broker recovery.
-            # Do not tell the client to retry a potentially accepted application task.
-            pass
     return serialize(a)
 
 

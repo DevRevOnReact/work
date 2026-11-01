@@ -1,7 +1,15 @@
 import pytest
 from playwright.async_api import async_playwright
+
 from jobpilot.answers import AnswerEngine, NeedsAttention
-from jobpilot.ats import GreenhouseAdapter, AshbyAdapter, LeverAdapter
+from jobpilot.ats import (
+    AshbyAdapter,
+    GenericFormAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+    SmartRecruitersAdapter,
+    WorkableAdapter,
+)
 from jobpilot.domain import Profile
 
 FORM = """<html><body><form onsubmit="event.preventDefault(); window.submissions=(window.submissions||0)+1; document.body.innerHTML='<h1>Thank you for applying</h1>'">
@@ -12,7 +20,8 @@ FORM = """<html><body><form onsubmit="event.preventDefault(); window.submissions
 <button type="submit">Submit application</button></form></body></html>"""
 
 
-@pytest.mark.parametrize("adapter", [GreenhouseAdapter, AshbyAdapter, LeverAdapter])
+@pytest.mark.parametrize("adapter", [GenericFormAdapter, GreenhouseAdapter, AshbyAdapter, LeverAdapter,
+                                     WorkableAdapter, SmartRecruitersAdapter])
 async def test_real_browser_fill_submit_verify(adapter, tmp_path):
     resume = tmp_path / "cv.pdf"
     resume.write_bytes(b"%PDF-1.4\n%%EOF")
@@ -21,11 +30,12 @@ async def test_real_browser_fill_submit_verify(adapter, tmp_path):
         page = await browser.new_page()
         await page.set_content(FORM)
         engine = AnswerEngine(Profile(full_name="Test Candidate", email="test@example.invalid", skills=["React"], years_experience=5), {})
-        evidence = await adapter().prepare(page, resume, engine, "React role")
+        instance = adapter()
+        evidence = await instance.prepare(page, resume, engine, "React role")
         assert len(evidence) == 3
         assert await page.locator("input[type=file]").evaluate("el=>el.files.length") == 1
-        await adapter().submit(page)
-        assert await adapter().verify(page)
+        await instance.submit(page)
+        assert await instance.verify(page)
         assert await page.evaluate("window.submissions") == 1
         await browser.close()
 
@@ -66,13 +76,14 @@ async def test_russian_form_and_generated_required_cover_letter(tmp_path):
         await page.set_content(form)
         engine = AnswerEngine(Profile(full_name="Тест Кандидат", email="test@example.invalid",
                                       skills=["Python", "SQL"], years_experience=3), {})
-        evidence = await LeverAdapter().prepare(page, resume, engine, "Python Developer. Python SQL.")
+        instance = LeverAdapter()
+        evidence = await instance.prepare(page, resume, engine, "Python Developer. Python SQL.")
         assert len(evidence) == 4
         assert await page.locator('input[name="cover"]').evaluate("el => el.files[0].type") == "application/pdf"
         assert await page.locator('input[name="cover"]').evaluate("el => el.files[0].size") > 500
         assert await page.locator('input[name="name"]').input_value() == "Тест Кандидат"
-        await LeverAdapter().submit(page)
-        assert await LeverAdapter().verify(page)
+        await instance.submit(page)
+        assert await instance.verify(page)
         assert await page.evaluate("window.submissions") == 1
         await browser.close()
 

@@ -22,6 +22,7 @@ from .services import (
 from .source_api import router as source_router
 from .notifications import router as notification_router
 from .top_vacancies import router as top_router
+from .automation_api import router as automation_router
 
 
 @asynccontextmanager
@@ -43,11 +44,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.search_runtime = runtime
     if runtime:
         runtime.start()
+    from .application_runtime import ApplicationRuntime
+    application_runtime = ApplicationRuntime()
+    app.state.application_runtime = application_runtime
+    application_runtime.start()
     try:
         yield
     finally:
         if runtime:
             runtime.stop()
+        application_runtime.stop()
 
 
 app = FastAPI(title="JobPilot", version="0.1.0", lifespan=lifespan)
@@ -81,6 +87,7 @@ app.include_router(linkedin_jobs_router)
 app.include_router(company_router)
 app.include_router(notification_router)
 app.include_router(top_router)
+app.include_router(automation_router)
 
 
 @app.get("/release", dependencies=[Depends(authenticate)])

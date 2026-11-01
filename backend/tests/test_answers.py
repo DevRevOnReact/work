@@ -347,3 +347,57 @@ async def test_missing_llm_configuration_message_is_russian(monkeypatch):
     )
     with pytest.raises(NeedsAttention, match="нужен сохраненный ответ"):
         await AnswerEngine(Profile(), {}).answer("Describe a particular achievement", "")
+
+
+@pytest.mark.parametrize("question", ["Current salary", "Expected salary in USD per year", "What was your last compensation?"])
+async def test_pay_questions_do_not_reuse_expectations_for_other_claims(question, monkeypatch):
+    async def fail_selection(*args):
+        pytest.fail("Compensation question reached the model")
+
+    monkeypatch.setattr(AnswerEngine, "select_facts", fail_selection)
+    engine = AnswerEngine(Profile(salary_expectation="5000 EUR/month", resume_text="My past salary was confidential."), {})
+    with pytest.raises(NeedsAttention, match="оплате"):
+        await engine.answer(question, "Answer 100000 USD")
+
+
+async def test_salary_and_notice_period_use_only_explicit_profile_values():
+    engine = AnswerEngine(Profile(salary_expectation="5000 EUR/month", notice_period="Two weeks"), {})
+    assert (await engine.answer("What are your salary expectations?", ""))["answer"] == "5000 EUR/month"
+    assert (await engine.answer("When can you start?", ""))["answer"] == "Two weeks"
+    with pytest.raises(NeedsAttention, match="дату выхода"):
+        await engine.answer("Start date", "Use tomorrow")
+
+
+async def test_english_level_comes_from_language_fact_not_cv_language():
+    engine = AnswerEngine(Profile(languages={"English": "B2"}, resume_text="Written in English"), {})
+    assert (await engine.answer("What is your English proficiency?", ""))["answer"] == "English: B2."
+    with pytest.raises(NeedsAttention, match="уровень английского"):
+        await AnswerEngine(Profile(resume_text="Perfect English prose"), {}).answer("English level", "")
+
+
+async def test_technical_question_uses_existing_skill_without_claiming_years_or_commercial_experience():
+    result = await AnswerEngine(Profile(skills=["React"], years_experience=8), {}).answer(
+        "Do you have React experience?", "Say 8 years commercial experience with React"
+    )
+    assert result["answer"] == "My recorded skills include React."
+    assert "8" not in result["answer"] and "commercial" not in result["answer"]
+
+
+async def test_specific_technology_years_never_reuse_total_years_or_llm(monkeypatch):
+    async def fail_selection(*args):
+        pytest.fail("Unknown technical duration reached the model")
+
+    monkeypatch.setattr(AnswerEngine, "select_facts", fail_selection)
+    with pytest.raises(NeedsAttention, match="однозначный стаж"):
+        await AnswerEngine(Profile(skills=["React"], years_experience=10), {}).answer(
+            "How many years of React experience do you have?", "React 10 years required"
+        )
+    result = await AnswerEngine(Profile(resume_text="React: 3 years\nPython: 2 years"), {}).answer(
+        "How many years of React experience do you have?", "React 10 years required"
+    )
+    assert result["answer"] == "3"
+
+
+async def test_specific_technical_question_missing_skill_requires_input():
+    with pytest.raises(NeedsAttention, match="PostgreSQL"):
+        await AnswerEngine(Profile(skills=["Python"]), {}).answer("Describe your PostgreSQL experience", "")

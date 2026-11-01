@@ -1,5 +1,30 @@
 import { api } from "@/lib/api";
 import { useResource, type WorkspaceState } from "@/hooks/use-workspace";
+import { AutomationSettings } from "./automation-settings";
+
+function WorkAuthorization({profile, state: s}: {profile: Record<string, unknown>; state: WorkspaceState}) {
+  const stored = profile.work_authorization;
+  const declarations: Record<string, boolean> = stored && typeof stored === "object" && !Array.isArray(stored)
+    ? Object.fromEntries(Object.entries(stored).filter(([, value]) => typeof value === "boolean")) : {};
+  return <section className="panel padded"><h2>Право на работу</h2>
+    <p>Укажите подтверждённый статус для конкретной страны. Эти сведения используются для проверки допуска и заполнения заявок.</p>
+    <form onSubmit={event => {event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
+      const country = String(data.get("country")).trim();
+      if (!country) return;
+      void s.action(() => api("profile", "PUT", {work_authorization: {...declarations, [country]: data.get("permitted") === "yes"}}), "Статус права на работу сохранён")
+        .then(saved => {if (saved) form.reset();});
+    }}><fieldset disabled={s.pending}><div className="form-grid two">
+      <label>Страна<input name="country" required maxLength={100} placeholder="Например, Georgia"/></label>
+      <label>Подтверждённый статус<select name="permitted" required defaultValue=""><option value="" disabled>Выберите статус</option>
+        <option value="yes">Имею право на работу</option><option value="no">Не имею права на работу</option></select></label>
+    </div><button className="button" type="submit">Сохранить статус</button></fieldset></form>
+    {Object.entries(declarations).map(([country, permitted]) => <div className="resume-row" key={country}>
+      <div><strong>{country}</strong><small>{permitted ? "Право на работу подтверждено" : "Право на работу отсутствует"}</small></div>
+      <button className="text-button danger" disabled={s.pending} onClick={() => void s.action(() => api("profile", "PUT",
+        {work_authorization: Object.fromEntries(Object.entries(declarations).filter(([key]) => key !== country))}), "Подтверждение удалено")}>Удалить подтверждение</button>
+    </div>)}
+  </section>;
+}
 
 export function ResumesView({state: s}: {state: WorkspaceState}) {
   const profile = useResource<Record<string, unknown>>("profile");
@@ -31,15 +56,24 @@ export function ResumesView({state: s}: {state: WorkspaceState}) {
           s.setSelected(search?.id || null); s.setEditing(Boolean(search)); s.navigate("search");}}>Настроить поиск</button></div>)}
     </section>
     {profile.error && <p className="notice error">{profile.error.message}</p>}
-    {profile.data && <form className="panel padded" key={JSON.stringify([profile.data.location, profile.data.relocation, profile.data.salary_expectation])}
+    {profile.data && <form className="panel padded" key={JSON.stringify(profile.data)}
       onSubmit={e => {e.preventDefault(); const body = Object.fromEntries(new FormData(e.currentTarget));
         void s.action(() => api("profile", "PUT", body), "Общие условия сохранены");
       }}><h2>Общие условия</h2><p>Используются при оценке всех резюме. Загрузка другой версии сохраняет эти условия.</p>
       <fieldset disabled={s.pending}><div className="form-grid three">
+        <label>Полное имя<input name="full_name" autoComplete="name" defaultValue={String(profile.data.full_name || "")}/></label>
+        <label>Email для откликов<input name="email" type="email" autoComplete="email" defaultValue={String(profile.data.email || "")}/></label>
+        <label>Телефон<input name="phone" type="tel" autoComplete="tel" defaultValue={String(profile.data.phone || "")}/></label>
         <label>Местоположение<input name="location" defaultValue={String(profile.data.location || "")}/></label>
         <label>Условия переезда<input name="relocation" defaultValue={String(profile.data.relocation || "")}/></label>
         <label>Ожидаемая зарплата<input name="salary_expectation" defaultValue={String(profile.data.salary_expectation || "")}/></label>
+        <label>Готовность приступить к работе<input name="notice_period" defaultValue={String(profile.data.notice_period || "")}/></label>
+        <label>Портфолио<input name="portfolio" type="url" defaultValue={String(profile.data.portfolio || "")}/></label>
+        <label>LinkedIn<input name="linkedin" type="url" defaultValue={String(profile.data.linkedin || "")}/></label>
+        <label>GitHub<input name="github" type="url" defaultValue={String(profile.data.github || "")}/></label>
       </div><button className="button">Сохранить условия</button></fieldset>
     </form>}
+    {profile.data && <WorkAuthorization profile={profile.data} state={s}/>}
+    <AutomationSettings/>
   </>;
 }

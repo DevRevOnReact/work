@@ -28,7 +28,7 @@ from .models import (
     uid,
 )
 from .security import ATS_HOSTS, public_url, validate_application_url
-from .services import audit, ingest, queue_ready, readiness, recover_stale, transition
+from .services import audit, ingest, readiness, recover_stale, transition
 from .sources import ADAPTERS
 
 log = structlog.get_logger()
@@ -114,14 +114,13 @@ def discover_source(task: Any, source_id: str) -> None:
 
 @celery.task(name="jobpilot.dispatch")
 def dispatch() -> None:
+    # Compatibility task: new applications are always handled by the durable
+    # prepare/review/submit runtime in the API, never the old immediate sender.
+    from .application_runtime import ApplicationRuntime
     with SessionLocal() as db:
         recover_stale(db, settings().application_timeout_seconds + 120)
-        queue_ready(db)
         db.commit()
-        control = db.get(Control, 1)
-        if control and control.enabled:
-            for app in db.scalars(select(Application).where(Application.state == "READY").limit(100)):
-                apply.delay(app.id)
+    ApplicationRuntime().select_eligible()
 
 
 def claim(application_id: str) -> bool:
@@ -288,8 +287,13 @@ async def execute(application_id: str) -> None:
 
 @celery.task(name="jobpilot.apply")
 def apply(application_id: str) -> None:
-    if claim(application_id):
-        asyncio.run(execute(application_id))
+    from .automation import request_application
+    with SessionLocal() as db:
+        app = db.get(Application, application_id)
+        job = db.get(Job, app.job_id) if app else None
+        if job:
+            request_application(db, job)
+            db.commit()
 
 
 @celery.task(name="jobpilot.deliver_outbox")

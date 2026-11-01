@@ -9,9 +9,9 @@ python scripts/init_env.py
 docker compose up -d --build --remove-orphans
 ```
 
-Open http://localhost:3000. The default stack is **PostgreSQL + API + web**. Database migrations run before API startup. One API process owns a single background search thread and the three-hour scheduler. Redis, Celery workers, a separate scheduler and Chromium are absent from the default stack. `--remove-orphans` stops old worker/scheduler/Redis containers from the previous configuration; existing database and artifact volumes are preserved. Do not use `down -v`.
+Open http://localhost:3000. The default stack is **PostgreSQL + API + web**. Database migrations run before API startup. One API process owns the search thread, three-hour scheduler and application browser runtime. Chromium starts on demand. Redis, Celery workers and a separate scheduler are unnecessary. `--remove-orphans` stops old worker/scheduler/Redis containers from the previous configuration; existing database and artifact volumes are preserved. Do not use `down -v`.
 
-Steady-state memory limits total **1,088 MiB**: database 256 MiB, API 512 MiB, web 320 MiB. CPU limits total 2 cores. These are container ceilings, not measured usage or a limit on Docker Desktop's VM/build cache. Frontend builds run separately and can temporarily use more memory. The database keeps its existing named volume.
+Memory limits total **1,600 MiB**: database 256 MiB, API including Chromium 1,024 MiB, web 320 MiB. CPU limits total 2 cores. These are container ceilings, not measured usage or a limit on Docker Desktop's VM/build cache. Limit concurrent review sessions with `APPLICATION_SESSION_LIMIT` (default 3). Frontend builds run separately and can temporarily use more memory. The database keeps its existing named volume.
 
 ## Run without Docker
 
@@ -20,6 +20,8 @@ Requires Python 3.11+ and Node 22+. Install dependencies and prepare the local S
 ```sh
 pip install -r backend/requirements.runtime.lock
 pip install --no-deps -e backend
+pip install playwright==1.64.0
+python -m playwright install chromium
 python scripts/setup_searches.py --local resume.pdf
 python scripts/run_local.py
 ```
@@ -164,6 +166,24 @@ npm run build
 
 For a running local app: `python scripts/ui_smoke.py` checks navigation, keyless entry, cross-origin write rejection, company search, filter chips and desktop/mobile layout. `python scripts/ui_search_smoke.py` uses controlled API fixtures to check live progress, errors, worldwide discovery and launching company searches without modifying user records. These require the development Playwright dependency and its browser. `python scripts/live_sources.py --catalog --companies` checks all catalog feeds and GitHub discovery in the US, Germany and Singapore without changing database records, writing `data/source-api-audit.json`. PostgreSQL integration tests require a disposable `TEST_POSTGRES_URL`.
 
-Legacy application history and APIs remain compatible; legacy application automation is not scheduled or installed in the default runtime. Its Python dependencies are available through the optional `automation` extra and Docker `automation` target. Server-to-server authentication can be explicitly enabled with `AUTH_REQUIRED=true` and a strong `API_TOKEN`; there is no browser key-entry flow. This default keyless configuration is intended for local development.
+Application preparation runs in the API process without Redis/Celery. Existing application history is retained; old apply endpoints/tasks now queue preparation for review. Server-to-server authentication can be explicitly enabled with `AUTH_REQUIRED=true` and a strong `API_TOKEN`; there is no browser key-entry flow. This default keyless configuration is intended for local development.
+
+## Automatic job applications
+
+In **Резюме и профиль → Автоматические отклики**, enter your verified contact details, location, work authorization and exact authorized employer/ATS domains (for example `jobs.ashbyhq.com`, `jobs.lever.co`, `job-boards.greenhouse.io`). Wildcard trust is unsupported. A source's presence in the job catalog alone does not authorize sharing your CV. The default mode is manual and autonomous submission is disabled.
+
+Click **Auto Apply** on a saved search result or top vacancy. The agent selects an intact uploaded resume using existing matching, creates a deterministic ATS-friendly DOCX, opens Chromium, fills recognized fields and uploads the document. The card shows answers, the selected source resume, generated DOCX, browser screenshot and action log. **Разрешить отправку работодателю** approves the current document, answers, profile and filled form. Changes invalidate approval. Only a fresh visible success confirmation after the actual click marks a submission as complete.
+
+- **Manual:** prepare a selected vacancy, then wait for approval.
+- **Assisted:** periodically select compatible saved results above the threshold and prepare them for individual approval.
+- **Autonomous:** requires a separate explicit opt-in, compatible location/employment conditions and authorized domains. Daily limits, excluded companies and required approval categories apply immediately. Legal/personal/salary answers still require verified facts or exact previously approved answers. Default sensitive categories require individual application approval.
+
+Greenhouse, Ashby, Lever, Workable and SmartRecruiters adapters share accessible-form handling; a conservative fallback handles custom authorized domains. Native controls, accessible dropdowns, conditional fields, uploads and bounded multi-step forms are supported. Unrecognized controls, PDF-only CV requirements, protected upload hosts or ambiguous submit buttons pause for help instead of guessing. Arbitrary website compatibility is not guaranteed. Public posting URLs from aggregators may need the employer's direct application link added through the existing manual-job API; the agent never invents a destination.
+
+Locally Chromium is visible (`APPLICATION_BROWSER_HEADLESS=false`). Complete login/CAPTCHA/MFA in that exact agent browser, then resume the application. Browser sessions stay alive up to `APPLICATION_SESSION_SECONDS=900`. Opening the employer link in another browser does not share its session. Containers/cloud use headless Chromium; this version has no remote browser control, so interactive authentication there requires an operator-accessible browser deployment. No CAPTCHA bypass or stored plaintext credentials are used. Browser cookies are memory-only; after session expiry/restart you may need to sign in again.
+
+Pause, resume and cancel are durable. Pre-submit work can be reconstructed after a restart. A committed submit intent permanently blocks repeated Submit, even on timeout/crash; **Проверить подтверждение** only observes the surviving session. Without it, check the employer's confirmation or email manually. Existing outcome recording accepts explicitly documented manual evidence. Telegram uses the existing durable, rate-limit aware notification queue. Documents/screenshots use the existing artifact directory and authenticated endpoints. With `STORE_RESUME_FILES_IN_DB=true`, generated DOCX and screenshots are also retained in the database and remain downloadable after ephemeral disk loss, like source CVs.
+
+See [application automation details](docs/application-automation.md) for API and test commands.
 
 See [architecture](docs/architecture.md) and [filter research](docs/filter-research.md).

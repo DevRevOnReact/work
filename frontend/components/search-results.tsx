@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SearchDetail } from "@/lib/types";
 import { activeFilters, emptyFilters } from "@/lib/search-filters";
+import { AutoApplyButton } from "./application-panel";
 
 export function SearchResults({search, filename}: {search: SearchDetail; filename: string}) {
   const [page, setPage] = useState(0);
@@ -18,6 +19,7 @@ export function SearchResults({search, filename}: {search: SearchDetail; filenam
         <span className="score">{job.score}<small>/100</small></span></summary>
       <p>{job.salary || "Зарплата не указана"} · {job.provider} · {job.published_at ? new Date(job.published_at).toLocaleDateString("ru-RU") : "Дата неизвестна"}</p>
       <a href={job.canonical_url} target="_blank" rel="noreferrer">Открыть вакансию ↗</a>
+      <AutoApplyButton canonicalUrl={job.canonical_url}/>
       <h3>Как рассчитана оценка</h3><div className="criteria-list">{job.explanation.criteria?.map(c =>
         <div className="criterion" key={c.key}><strong>{c.label}{c.max_score === 0 ? " · отдельная проверка" : `: ${c.score}/${c.max_score ?? 10}`}</strong><p>{c.reason}</p></div>)}</div>
       {job.explanation.blockers?.map(reason => <p className="notice error" key={reason}>{reason}</p>)}

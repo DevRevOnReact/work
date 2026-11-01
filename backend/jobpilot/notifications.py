@@ -163,7 +163,9 @@ def combine_search_reports(db: Session) -> None:
         return
     groups: list[list[SearchNotification]] = []
     for report in reports:
-        if not groups or publication(report.created_at) - publication(groups[-1][-1].created_at) > timedelta(hours=1):
+        created = publication(report.created_at)
+        previous = publication(groups[-1][-1].created_at) if groups else created
+        if not groups or (created is not None and previous is not None and created - previous > timedelta(hours=1)):
             groups.append([report])
         else:
             groups[-1].append(report)
@@ -195,7 +197,7 @@ def combine_search_reports(db: Session) -> None:
             lines.append(settings().public_app_url.rstrip("/") + "/top")
         anchor = group[0]
         anchor.message = "\n".join(lines)
-        anchor.next_attempt = max(publication(report.next_attempt) for report in group)
+        anchor.next_attempt = max(publication(report.next_attempt) or now() for report in group)
         for duplicate in group[1:]:
             duplicate.status = "superseded"
 

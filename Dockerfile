@@ -11,6 +11,8 @@ WORKDIR /app
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY backend/requirements.runtime.lock /app/backend/requirements.runtime.lock
 RUN pip install --no-cache-dir -r backend/requirements.runtime.lock
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN pip install --no-cache-dir 'playwright==1.64.0' && playwright install --with-deps chromium
 COPY backend/ /app/backend/
 RUN pip install --no-deps --no-cache-dir /app/backend
 COPY --from=web /build/.next/standalone /app/web/
@@ -18,6 +20,6 @@ COPY --from=web /build/.next/static /app/web/.next/static
 COPY scripts/serve_cloud.py /app/scripts/serve_cloud.py
 RUN useradd --create-home --uid 10001 app && mkdir -p /app/data && chown -R app:app /app
 USER app
-ENV PYTHONUNBUFFERED=1 NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production DATA_DIR=/app/data
+ENV PYTHONUNBUFFERED=1 NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production DATA_DIR=/app/data APPLICATION_BROWSER_HEADLESS=true
 EXPOSE 10000
 CMD ["python", "scripts/serve_cloud.py"]

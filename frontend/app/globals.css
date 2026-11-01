@@ -123,3 +123,17 @@ details > summary { cursor:pointer; color:var(--purple); font-size:12px; margin:
 .top-vacancy .panel-heading { align-items: flex-start; }
 .top-vacancy h3 { margin-top: 0; }
 .top-vacancy .button { margin-top: 12px; }
+textarea { font:inherit; width:100%; min-width:0; resize:vertical; padding:9px 11px; border:1px solid #dce0eb; border-radius:7px; color:var(--text); background:white; font-size:13px; }
+textarea:focus-visible { outline:3px solid #b0a0ed; outline-offset:3px; }
+.auto-apply { margin:12px 0; }
+.application-panel { margin:16px 0; padding:18px; border:1px solid var(--border); border-radius:8px; background:#faf9fd; overflow-wrap:anywhere; }
+.application-panel h3 { margin:0; }
+.application-panel label { margin:12px 0; }
+.application-actions { margin-top:18px; }
+.application-answers { margin:12px 0; }
+.application-answers > div { padding:10px 0; border-top:1px solid var(--border); }
+.application-answers dt { font-weight:600; font-size:13px; }
+.application-answers dd { white-space:pre-wrap; margin:6px 0 0; color:var(--muted); font-size:13px; }
+.application-screenshot { display:block; max-width:100%; max-height:420px; object-fit:contain; object-position:left top; border:1px solid var(--border); }
+.application-history { margin-top:24px; }
+.application-history-detail { flex-basis:100%; min-width:0; }

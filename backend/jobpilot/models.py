@@ -89,6 +89,12 @@ class Application(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    mode: Mapped[str] = mapped_column(String(20), default="manual")
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    generated_resume_key: Mapped[str | None] = mapped_column(String(255))
+    prepared_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    approved_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    command: Mapped[str | None] = mapped_column(String(20))
 
 
 class Audit(Base):
@@ -98,6 +104,14 @@ class Audit(Base):
     kind: Mapped[str] = mapped_column(String(80))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ApplicationArtifact(Base):
+    __tablename__ = "application_artifacts"
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(40), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class Answer(Base):
@@ -114,6 +128,10 @@ class Control(Base):
     auto_apply: Mapped[bool] = mapped_column(Boolean, default=False)
     min_score: Mapped[int] = mapped_column(default=80)
     daily_limit: Mapped[int] = mapped_column(default=20)
+    mode: Mapped[str] = mapped_column(String(20), default="manual")
+    authorized_domains: Mapped[list[str]] = mapped_column(JSON, default=list)
+    excluded_companies: Mapped[list[str]] = mapped_column(JSON, default=list)
+    required_approval_categories: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["legal", "salary", "personal"])
 
 
 class Outbox(Base):

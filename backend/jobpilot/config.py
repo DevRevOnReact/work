@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     llm_model: str = ""
     browser_timeout_ms: int = 30000
     application_timeout_seconds: int = 600
+    application_browser_headless: bool = False
+    application_session_seconds: int = 900
+    application_session_limit: int = 3
 
 
 @lru_cache

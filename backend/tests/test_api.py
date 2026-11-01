@@ -96,7 +96,7 @@ def test_starter_sources_idempotent_without_legacy_discovery(client, monkeypatch
     assert enqueue.call_count == 0
 
 
-def test_apply_click_queues_exact_resume_without_unattended_autopilot(client, db, active_candidate, monkeypatch):
+def test_apply_click_prepares_for_review_without_unattended_submission(client, db, active_candidate, monkeypatch):
     from unittest.mock import MagicMock
     from sqlalchemy import select
     from jobpilot.models import Application, Control, Source
@@ -115,9 +115,10 @@ def test_apply_click_queues_exact_resume_without_unattended_autopilot(client, db
     monkeypatch.setattr(apply, "delay", enqueue)
     response = client.post(f"/jobs/{application.job_id}/action", headers=headers(), json={"action": "apply"})
     assert response.status_code == 200
-    assert response.json()["state"] == "READY"
-    assert response.json()["resume_id"] == active_candidate.facts["active_resume_id"]
-    enqueue.assert_called_once_with(application.id)
+    assert response.json()["state"] == "QUEUED"
+    assert response.json()["mode"] == "manual"
+    assert response.json()["submit_intent_at"] is None
+    enqueue.assert_not_called()
 
 
 def test_unattended_autopilot_is_opt_in(client):
@@ -148,5 +149,6 @@ def test_pre_submit_retry_revalidates_edited_profile(client, db, active_candidat
     monkeypatch.setattr(apply, "delay", MagicMock())
     response = client.post(f"/jobs/{application.job_id}/action", headers=headers(), json={"action": "retry"})
     assert response.status_code == 200
-    assert response.json()["state"] == "READY"
-    assert response.json()["resume_id"] == active_candidate.facts["active_resume_id"]
+    assert response.json()["state"] == "QUEUED"
+    assert response.json()["resume_id"] is None  # Browser worker selects from the current, intact uploads.
+    assert response.json()["submit_intent_at"] is None

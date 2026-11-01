@@ -39,3 +39,18 @@ export type TopVacancy = Pick<JobResult, "title" | "company" | "location" | "sal
 };
 export type TopVacancies = {window_hours: number; min_score: number; total: number; items: TopVacancy[]};
 export type PageName = "search" | "top" | "companies" | "sources" | "resumes";
+export type AutomationSettings = {
+  enabled: boolean; mode: "manual" | "assisted" | "autonomous"; auto_apply: boolean;
+  min_score: number; daily_limit: number; authorized_domains: string[]; excluded_companies: string[];
+  required_approval_categories: string[]; browser_available: boolean; browser_headless: boolean;
+};
+export type ApplicationDetail = {
+  id: string; job_id: string; state: string; attention: string | null; mode: string;
+  progress: {step?: string; message?: string; question?: string; questions?: string[]; browser_status?: string; blocked_host?: string;
+    events?: {at?: string; message: string; level?: string; step?: string}[]};
+  resume_id: string | null; generated_resume_url: string | null;
+  answers: {question: string; answer: string; evidence?: unknown}[];
+  job: {company: string; title: string; canonical_url: string};
+  submit_intent_at: string | null; submitted_at: string | null;
+  approval_token: string | null; screenshot_url: string | null;
+};

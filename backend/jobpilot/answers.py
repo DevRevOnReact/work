@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from .config import settings
-from .domain import Profile
+from .domain import SKILL_ALIASES, Profile, _contains
 
 
 class NeedsAttention(Exception):
@@ -28,6 +28,22 @@ LEGAL = re.compile(
     r"семейное положение|беременн|marital|pregnan|\bage\b|паспорт|passport|здоровь|medical history",
     re.IGNORECASE,
 )
+
+# These categories cannot be answered by selecting a vaguely relevant CV excerpt.
+# Exact approved answers are checked first; their wording remains under user control.
+COMPENSATION = re.compile(r"salary|compensation|remuneration|pay expectation|hourly rate|зарплат|оплат|оклад", re.IGNORECASE)
+AVAILABILITY = re.compile(r"notice period|when.*(?:start|available)|start date|^availability$|your availability|"
+                          r"available (?:to start|from|on|tomorrow|immediately)|"
+                          r"когда.*(?:приступ|выйти|начать)|срок.*выход|дата.*выход", re.IGNORECASE)
+
+
+def _required_russian(question: str) -> bool:
+    """Explicit language requests override the language of the field label."""
+    if re.search(r"(?:answer|respond|reply|write).*?in english|(?:ответ|напиш).*?английск", question, re.IGNORECASE):
+        return False
+    if re.search(r"(?:answer|respond|reply|write).*?in russian|(?:ответ|напиш).*?русск", question, re.IGNORECASE):
+        return True
+    return bool(re.search(r"[а-яё]", question, re.IGNORECASE))
 
 
 class AnswerEngine:
@@ -68,6 +84,9 @@ class AnswerEngine:
                 summary = item.get("summary") if isinstance(item, dict) else None
                 if isinstance(summary, str) and summary.strip():
                     result[f"{kind}.{i}"] = summary.strip()
+        for language, level in (p.languages or {}).items():
+            if isinstance(level, str) and level.strip():
+                result[f"languages.{language}"] = f"{language}: {level.strip()}."
         # Stable, bounded excerpts are evidence, never instructions for the model.
         resume = getattr(p, "resume_text", None)
         if isinstance(resume, str):
@@ -84,7 +103,7 @@ class AnswerEngine:
     async def answer(self, question: str, context: str) -> dict[str, Any]:
         q = normalize(question)
         p = self.profile
-        russian = bool(re.search(r"[а-яё]", q, re.IGNORECASE))
+        russian = _required_russian(question)
         if q in self.approved:
             return {"question": question, "answer": self.approved[q], "evidence": [f"approved.{q}"]}
         legal = {
@@ -117,6 +136,23 @@ class AnswerEngine:
                     "evidence": [f"work_authorization.{country}"],
                 }
             raise NeedsAttention(f"Сохраните явный ответ на правовой или персональный вопрос: {question}")
+        # Do not use an expectation as a claim about previous pay, negotiate a
+        # range, convert a currency, or turn a notice period into a calendar date.
+        if COMPENSATION.search(q) and q not in {
+            "salary expectations", "expected salary", "зарплатные ожидания", "ожидаемая зарплата",
+        }:
+            if p.salary_expectation and re.fullmatch(
+                r"(?:what (?:are|is) your |your )?(?:salary expectations|expected salary|desired salary)", q
+            ):
+                return {"question": question, "answer": p.salary_expectation,
+                        "evidence": ["profile.salary_expectation"]}
+            raise NeedsAttention(f"Подтвердите ответ об оплате и её валюте или периоде: {question}")
+        if AVAILABILITY.search(q) and q not in {
+            "notice period", "срок выхода на работу", "когда можете приступить к работе",
+        }:
+            if q in {"when can you start", "when are you available to start", "what is your notice period", "availability"} and p.notice_period:
+                return {"question": question, "answer": p.notice_period, "evidence": ["profile.notice_period"]}
+            raise NeedsAttention(f"Подтвердите доступность или дату выхода: {question}")
         mapping = {
             "full name": p.full_name,
             "name": p.full_name,
@@ -182,6 +218,20 @@ class AnswerEngine:
                 raise NeedsAttention(f"В профиле отсутствуют данные для ответа: {question}")
             return {"question": question, "answer": mapping[mapped], "evidence": [f"profile.{mapped}"]}
         facts = self.facts(russian)
+        # Language proficiency is an explicit fact, never inferred from the CV's
+        # language, a name or location. More specific certificates need approval.
+        if re.fullmatch(
+            r"(?:what is your |your |how would you rate your )?english(?: language)?(?: proficiency| level| skills)?|"
+            r"(?:уровень |ваш уровень |какой у вас уровень |знание |знание языка )английского(?: языка)?|английский",
+            q,
+        ):
+            key = next((f"languages.{name}" for name in p.languages if normalize(name) in {"english", "английский"}), None)
+            if key and key in facts:
+                return {"question": question, "answer": facts[key], "evidence": [key]}
+            raise NeedsAttention(f"Укажите подтверждённый уровень английского: {question}")
+        technical = self.technical_answer(question, russian, facts)
+        if technical is not None:
+            return technical
         cover = bool(
             re.fullmatch(r"(?:your |ваше |добавьте |напишите )?(?:cover letter|сопроводительное письмо)", q)
         )
@@ -282,6 +332,57 @@ class AnswerEngine:
             )
             answer = opening + answer + closing
         return {"question": question, "answer": answer, "evidence": keys}
+
+    def technical_answer(self, question: str, russian: bool, facts: dict[str, str]) -> dict[str, Any] | None:
+        """Common stack questions need no model and never imply unrecorded tenure."""
+        q = normalize(question)
+        technologies = [name for name, aliases in SKILL_ALIASES.items()
+                        if any(_contains(alias, question) for alias in aliases)]
+        if not technologies:
+            return None
+        # A project example, a commercial-use claim and a duration are different
+        # claims from merely listing a technology among one's skills.
+        if re.search(r"how many|years|months|сколько|лет|года|месяц", q):
+            if len(technologies) != 1 or re.search(r"months|месяц", q):
+                raise NeedsAttention(f"Нужно подтвердить стаж по каждой технологии: {question}")
+            technology = technologies[0]
+            alias_pattern = "(?:" + "|".join(re.escape(alias) for alias in SKILL_ALIASES[technology]) + ")"
+            duration = r"(\d{1,2}(?:[.,]\d+)?)"
+            units = r"(?:years?|yrs?|лет|года?|год)"
+            patterns = [rf"(?<!\w){alias_pattern}\s*[:—–-]?\s*{duration}\s*{units}(?!\w)",
+                        rf"(?<!\w){duration}\s*{units}\s+(?:of\s+)?(?:experience\s+(?:with|in)\s+)?{alias_pattern}(?!\w)"]
+            values = {match.group(1).replace(",", ".") for pattern in patterns
+                      for match in re.finditer(pattern, self.profile.resume_text, re.IGNORECASE)}
+            if len(values) != 1:
+                raise NeedsAttention(f"В резюме не указан однозначный стаж по {technology}: {question}")
+            return {"question": question, "answer": next(iter(values)),
+                    "evidence": [f"resume.duration.{technology}"]}
+        if re.search(r"commercial|коммерческ|project|проект|achievement|достижен", q):
+            return None
+        if not re.fullmatch(
+            r"(?:(?:please )?(?:describe|tell us about|do you have|what is your|your|experience with|experience in).*)|"
+            r"(?:(?:опишите|расскажите|есть ли у вас|ваш опыт|опыт работы с|опыт с).*)",
+            q,
+        ):
+            return None
+        keys: list[str] = []
+        for technology in technologies:
+            aliases = SKILL_ALIASES[technology]
+            candidates = [key for key in facts if key.startswith(("employment.", "projects.", "resume."))
+                          and any(_contains(alias, facts[key]) for alias in aliases)]
+            if candidates:
+                keys.extend(candidates[:2])
+            elif any(normalize(skill) in {normalize(alias) for alias in aliases} for skill in self.profile.skills):
+                # The wording makes the evidence limit explicit rather than
+                # upgrading a recorded skill to commercial employment history.
+                key = f"skill.{technology}"
+                facts[key] = (f"В моём профиле указан навык {technology}." if russian
+                              else f"My recorded skills include {technology}.")
+                keys.append(key)
+            else:
+                raise NeedsAttention(f"Нет подтверждённых сведений о технологии {technology}: {question}")
+        keys = list(dict.fromkeys(keys))[:4]
+        return {"question": question, "answer": " ".join(facts[key] for key in keys), "evidence": keys}
 
     @staticmethod
     def relevant_facts(facts: dict[str, str], context: str, experience_only: bool = False) -> list[str]:

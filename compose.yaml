@@ -20,18 +20,19 @@ services:
   api:
     build:
       context: ./backend
-      target: runtime
+      target: automation
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://jobpilot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/jobpilot
       DATA_DIR: /data
       AUTH_REQUIRED: "false"
       EMBEDDED_SEARCHES: "true"
+      APPLICATION_BROWSER_HEADLESS: "true"
     # One API process owns the queue and three-hour scheduler.
     command: [sh, -c, "alembic upgrade head && exec uvicorn jobpilot.api:app --host 0.0.0.0 --port 8000 --workers 1"]
     volumes:
       - artifacts:/data
-    mem_limit: 512m
+    mem_limit: 1024m
     cpus: 1.0
     init: true
     depends_on:

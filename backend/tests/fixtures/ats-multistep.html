@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Local ATS application</title></head>
+<body><h1>Application for Frontend Engineer</h1>
+<form action="/submitted" method="post" enctype="multipart/form-data">
+  <section id="personal">
+    <label>Full name<input name="full_name" required></label>
+    <label>Email<input type="email" name="email" required></label>
+    <label>Resume<input type="file" name="resume" required accept="application/pdf,.docx"></label>
+    <label>Work arrangement<select name="arrangement" required onchange="showConditional(this.value)">
+      <option value="">Choose</option><option value="remote">Remote</option><option value="office">Office</option>
+    </select></label>
+    <div id="conditional"></div>
+    <button type="button" onclick="document.querySelector('#personal').hidden=true;document.querySelector('#screening').hidden=false">Next</button>
+  </section>
+  <section id="screening" hidden>
+    <fieldset><legend>Are you authorized to work in the USA?</legend>
+      <label>Yes<input type="radio" name="authorization" value="yes" required></label>
+      <label>No<input type="radio" name="authorization" value="no" required></label>
+    </fieldset>
+    <label>I agree to the privacy policy<input type="checkbox" name="privacy" required></label>
+    <label>Available date<input type="date" name="available" required></label>
+    <label>Technical skills<textarea name="skills" required></textarea></label>
+    <button type="submit">Submit application</button>
+  </section>
+</form>
+<script>
+function showConditional(value) {
+  document.querySelector('#conditional').innerHTML = value === 'remote'
+    ? '<label>Remote timezone<input name="timezone" required></label>' : '';
+}
+</script></body></html>

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { busy } from "@/lib/search-filters";
 import type { TopVacancies } from "@/lib/types";
 import type { WorkspaceState } from "@/hooks/use-workspace";
+import { AutoApplyButton } from "./application-panel";
 
 export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
   const [page, setPage] = useState(0);
@@ -39,6 +40,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
         {job.eligibility === "rejected" && <p className="notice error">Есть ограничения допуска — проверьте условия вакансии.</p>}
         {job.salary && <p>{job.salary}</p>}
         <a className="button" href={job.canonical_url} target="_blank" rel="noreferrer">Открыть вакансию ↗</a>
+        <AutoApplyButton canonicalUrl={job.canonical_url}/>
       </article>)}</div>
       {!data.data.items.length && <p className="empty-state">Пока нет вакансий с оценкой от 60 за последние 72 часа. Запустите обновление подборки или дождитесь ближайшего автопоиска.</p>}
       {data.data.total > 20 && <div className="pagination button-row">
