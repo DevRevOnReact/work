@@ -17,6 +17,7 @@ from .config import settings
 from .db import session
 from .http import authenticate, serialize
 from .models import Application, ApplicationArtifact, Control
+from .security import ATS_HOSTS
 from .services import audit
 
 router = APIRouter(prefix="/automation", dependencies=[Depends(authenticate)])
@@ -41,6 +42,7 @@ class AutomationSettings(BaseModel):
     min_score: int = Field(default=80, ge=0, le=100)
     daily_limit: int = Field(default=20, ge=1, le=100)
     authorized_domains: list[str] = Field(default_factory=list, max_length=100)
+    use_supported_sites: bool = False
     excluded_companies: list[str] = Field(default_factory=list, max_length=200)
     required_approval_categories: list[str] = Field(default_factory=lambda: ["legal", "salary", "personal"])
 
@@ -75,18 +77,21 @@ def get_settings(db: Session = Depends(session)) -> dict[str, Any]:
     control = db.get(Control, 1)
     assert control is not None
     return {**serialize(control), "browser_available": browser_available(),
+            "supported_domains": sorted(set().union(*ATS_HOSTS.values())),
             "browser_headless": settings().application_browser_headless}
 
 
 @router.put("/settings")
 def put_settings(body: AutomationSettings, db: Session = Depends(session)) -> dict[str, Any]:
+    if body.use_supported_sites:
+        body.authorized_domains = sorted(set(body.authorized_domains).union(*ATS_HOSTS.values()))
     if body.mode == "autonomous" and (not body.auto_apply or not body.authorized_domains):
-        raise HTTPException(422, "Автономная отправка требует явного согласия auto_apply и разрешённых доменов")
+        raise HTTPException(422, "Включите автоотправку и выберите поддерживаемые сайты или добавьте сайт работодателя")
     if body.mode != "autonomous" and body.auto_apply:
         raise HTTPException(422, "auto_apply разрешён только в автономном режиме")
     control = db.get(Control, 1)
     assert control is not None
-    for key, value in body.model_dump().items():
+    for key, value in body.model_dump(exclude={"use_supported_sites"}).items():
         setattr(control, key, value)
     audit(db, "application_policy_updated", body.model_dump())
     db.commit()

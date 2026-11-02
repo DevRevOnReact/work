@@ -148,16 +148,17 @@ def main():
 
         page.get_by_role("button", name="Резюме и профиль", exact=True).click()
         expect(page.get_by_role("heading", name="Автоматические отклики", exact=True)).to_be_visible()
-        page.get_by_label("Режим", exact=True).select_option("autonomous")
-        consent = page.get_by_label("Разрешаю JobPilot отправлять отклики", exact=False)
-        expect(consent).not_to_be_checked()
-        consent.check()
-        page.get_by_role("button", name="Сохранить настройки откликов", exact=True).click()
-        expect(page.get_by_text("Параметры автоматических откликов сохранены.", exact=True)).to_be_visible()
+        toggle = page.get_by_role("switch", name="Отправлять отклики автоматически")
+        expect(toggle).not_to_be_checked()
+        toggle.check()
+        page.get_by_role("button", name="Включить автоотправку", exact=True).click()
+        expect(page.get_by_text("Автоотправка включена", exact=True)).to_be_visible()
         assert settings["mode"] == "autonomous" and settings["auto_apply"] is True
-        page.get_by_label("Режим", exact=True).select_option("manual")
-        page.get_by_role("button", name="Сохранить настройки откликов", exact=True).click()
-        expect(page.get_by_text("Параметры автоматических откликов сохранены.", exact=True)).to_be_visible()
+        assert settings["use_supported_sites"] is True
+        page.screenshot(path=str(output / "settings-simple.png"), full_page=True)
+        toggle.uncheck()
+        page.get_by_role("button", name="Сохранить ручной режим", exact=True).click()
+        expect(page.get_by_text("Автоотправка выключена", exact=True)).to_be_visible()
         assert settings["auto_apply"] is False
         page.get_by_label("Страна", exact=True).fill("Georgia")
         page.get_by_label("Подтверждённый статус", exact=False).select_option("yes")

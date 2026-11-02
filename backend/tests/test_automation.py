@@ -595,3 +595,19 @@ async def test_real_browser_preparation_approval_and_confirmation_no_external_re
         assert requests == [workspace.job.canonical_url]
     finally:
         await runtime.close(app.id)
+
+
+def test_supported_sites_opt_in_expands_real_domains(db, monkeypatch):
+    from jobpilot.security import ATS_HOSTS
+    monkeypatch.setattr("jobpilot.automation_api.browser_available", lambda: True)
+    result = put_settings(AutomationSettings(mode="autonomous", auto_apply=True,
+                                           use_supported_sites=True), db)
+    assert set(result["authorized_domains"]) == set().union(*ATS_HOSTS.values())
+    assert result["auto_apply"] is True
+    assert db.get(Control, 1).mode == "autonomous"
+
+
+def test_supported_sites_never_imply_auto_send_consent(db):
+    with pytest.raises(HTTPException) as error:
+        put_settings(AutomationSettings(mode="autonomous", use_supported_sites=True), db)
+    assert error.value.status_code == 422
