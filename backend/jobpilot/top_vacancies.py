@@ -73,7 +73,7 @@ def top_vacancies(offset: int = Query(default=0, ge=0), limit: int = Query(defau
                   provider: Literal["", "linkedin"] = "",
                   db: Session = Depends(session)) -> dict[str, Any]:
     rows = top_rows(db, provider)
-    fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "eligibility")
+    fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "publication_label", "eligibility")
     return {"window_hours": WINDOW_HOURS, "min_score": MIN_SCORE, "total": len(rows),
             "items": [{**{key: row.data.get(key) for key in fields}, "id": row.id, "score": row.score,
                        "resume_filename": row.resume_filename, "search_name": row.search_name}

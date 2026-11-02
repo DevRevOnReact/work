@@ -41,10 +41,11 @@ def test_job_links_normalize_across_tracking_and_locale():
     with pytest.raises(ValueError): LinkedInJob.model_validate(record(published_at='2026-10-31T10:00:00'))
 
 
-def test_valid_research_is_scored_and_sent_with_description_once(db, monkeypatch):
+@pytest.mark.parametrize("relative", [False, True])
+def test_valid_research_is_scored_and_sent_with_description_once(db, monkeypatch, relative):
     first, second = setup_resumes(db)
     db.add_all([SavedSearch(name='Python', resume_id=first.id, filters={}), SavedSearch(name='React', resume_id=second.id, filters={})])
-    data = record()
+    data = record(**({"published_at": None, "publication_label": "3 hours ago"} if relative else {}))
     row = LinkedInCandidate(id=candidate_id(data['canonical_url']), data=data)
     db.add(row); db.commit()
     enable(monkeypatch)
@@ -57,6 +58,9 @@ def test_valid_research_is_scored_and_sent_with_description_once(db, monkeypatch
     alerts = list(db.scalars(select(SearchNotification)))
     assert len(top) == len(alerts) == 1
     assert top[0].resume_id == second.id and top[0].data['provider'] == 'linkedin'
+    if relative:
+        assert 'время оценочное' in alerts[0].message
+        assert top[0].data['publication_label'] == '3 hours ago'
     assert 'React TypeScript' in alerts[0].message and 'https://www.linkedin.com/jobs/view/1234567890' in alerts[0].message
     app.dependency_overrides[session] = lambda: db
     try:
@@ -112,3 +116,23 @@ def test_research_status_is_private(db, monkeypatch):
     app.dependency_overrides[session] = lambda: db
     try: assert TestClient(app).get('/linkedin/jobs/status').status_code == 401
     finally: app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("label,delta", [("3 hours ago", timedelta(hours=4, minutes=5)),
+    ("1 day ago", timedelta(days=2, minutes=5)), ("Reposted 5 minutes ago", timedelta(minutes=11))])
+def test_live_relative_labels_use_conservative_bound(label, delta):
+    data = record(published_at=None, publication_label=label)
+    item = LinkedInJob.model_validate(data)
+    assert item.published_at == item.verified_at - delta
+    assert item.model_dump(mode="json")["publication_label"] == label
+
+
+@pytest.mark.parametrize("label", ["2 days ago", "3 days ago", "1 week ago", "yesterday", "9999 hours ago"])
+def test_ambiguous_or_old_relative_labels_are_excluded(label):
+    with pytest.raises(ValueError):
+        LinkedInJob.model_validate(record(published_at=None, publication_label=label))
+
+
+def test_relative_label_cannot_override_timestamp():
+    with pytest.raises(ValueError):
+        LinkedInJob.model_validate(record(publication_label="3 hours ago"))

@@ -133,9 +133,14 @@ reload, refresh and mobile layout without changing user records.
 The top page can filter by LinkedIn. A separate Codex heartbeat researches
 public job pages every three hours while the computer and Codex are running;
 coverage is partial and is not LinkedIn's complete vacancy feed. It does not
-connect a mailbox or use a logged-in LinkedIn session. Only an explicit,
-confirmed publication date in the last 72 hours is accepted; a relative age in
-an old search snippet is insufficient.
+connect a mailbox or use a logged-in LinkedIn session. Publication freshness
+is checked on the live job page. Absolute dates are preferred; a fresh English
+relative label can establish a conservative lower publication bound (one extra
+time unit plus five minutes). Ambiguous ages of two or more days are excluded.
+The original relative label is retained and displayed as an estimate in Telegram
+and the top page. Relative ages in cached search snippets are never accepted.
+Each run searches up to 12 queries and checks up to 40 distinct job pages,
+rotating across React, Vue/PixiJS, full-stack and worldwide remote roles.
 
 Research records contain the job URL, title, employer, location, factual summary,
 publication timestamp, date evidence and verification timestamp. Run

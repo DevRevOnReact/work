@@ -24,7 +24,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
     <p className="hint">Новые подходящие вакансии отправляются в Telegram отдельными сообщениями с полной ссылкой. Одна вакансия не дублируется между поисками.</p>
     <label>Источник вакансий<select value={provider} onChange={event => {setProvider(event.target.value); setPage(0);}}>
       <option value="">Все источники</option><option value="linkedin">LinkedIn</option></select></label>
-    {provider === "linkedin" && <p className="hint">Публичная выдача LinkedIn может быть неполной. В топ попадают только вакансии с подтверждённой датой публикации и оценкой по вашему резюме от 60. В Telegram добавляется краткое описание.</p>}
+    {provider === "linkedin" && <p className="hint">Публичная выдача LinkedIn может быть неполной. В топ попадают только вакансии с проверенной свежестью публикации и оценкой по вашему резюме от 60. В Telegram добавляется краткое описание.</p>}
     {notification.data && <p role="status">Telegram: {notification.data.telegram ? `подключён · отправлено ${notification.data.telegram_counts?.sent || 0} · в очереди ${notification.data.telegram_counts?.pending || 0}` : "не настроен"}</p>}
     {notification.error && <p className="notice error">Не удалось проверить состояние Telegram: {notification.error.message}</p>}
     {notification.data?.last_error && <p className="notice error">Ошибка уведомлений: {notification.data.last_error}</p>}
@@ -35,7 +35,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
       <div className="top-vacancies">{data.data.items.map(job => <article className="top-vacancy" key={job.id}>
         <div className="panel-heading"><div><h3><a href={job.canonical_url} target="_blank" rel="noreferrer">{job.title} ↗</a></h3>
           <p>{job.company} · {job.location || "Местоположение не указано"}</p></div><span className="score">{job.score}<small>/100</small></span></div>
-        <small>Опубликовано {job.published_at ? new Date(job.published_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"}) : "—"} (Москва) · {job.provider}</small>
+        <small>{job.publication_label ? `LinkedIn: ${job.publication_label} (на момент проверки; время оценочное)` : <>Опубликовано {job.published_at ? new Date(job.published_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"}) : "—"} (Москва)</>} · {job.provider}</small>
         <small>Оценка по резюме: {job.resume_filename} · {job.search_name}</small>
         {job.eligibility === "rejected" && <p className="notice error">Есть ограничения допуска — проверьте условия вакансии.</p>}
         {job.salary && <p>{job.salary}</p>}

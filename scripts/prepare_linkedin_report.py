@@ -14,11 +14,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 class ResearchReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_started_at: AwareDatetime
-    checked: int = Field(ge=0, le=12, strict=True)
-    verified: int = Field(ge=0, le=12, strict=True)
-    inserted: int = Field(ge=0, le=12, strict=True)
-    accepted: int = Field(ge=0, le=12, strict=True)
-    pending: int = Field(ge=0, le=12, strict=True)
+    checked: int = Field(ge=0, le=40, strict=True)
+    verified: int = Field(ge=0, le=40, strict=True)
+    inserted: int = Field(ge=0, le=40, strict=True)
+    accepted: int = Field(ge=0, le=40, strict=True)
+    pending: int = Field(ge=0, le=40, strict=True)
     error: Literal["none", "source_unavailable", "search_failed", "processing_failed"] = "none"
 
     @model_validator(mode="after")
@@ -40,7 +40,7 @@ def prepare(record: dict) -> str:
     lines = ["JobPilot · LinkedIn · отчёт за 3 дня",
              started.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК"),
              f"Проверено вакансий: {item.checked}.",
-             f"С подтверждённой датой за 72 часа: {item.verified}.",
+             f"Со свежестью за 72 часа, проверенной на странице: {item.verified}.",
              f"Новых записей: {item.inserted}; повторов: {item.verified - item.inserted}.",
              f"Новых вакансий в топ (от 60/100): {item.accepted}."]
     if item.pending:

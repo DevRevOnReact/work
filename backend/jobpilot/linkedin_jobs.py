@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -38,7 +38,8 @@ class LinkedInJob(BaseModel):
     location: str = Field(default="", max_length=400)
     description: str = Field(min_length=100, max_length=20000)
     salary: str | None = Field(default=None, max_length=500)
-    published_at: datetime
+    published_at: datetime | None = None
+    publication_label: str = Field(default="", max_length=100)
     date_evidence: str = Field(min_length=10, max_length=500)
     verified_at: datetime
 
@@ -49,10 +50,36 @@ class LinkedInJob(BaseModel):
 
     @field_validator("published_at", "verified_at")
     @classmethod
-    def aware_date(cls, value: datetime) -> datetime:
+    def aware_date(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         if value.tzinfo is None:
             raise ValueError("Укажите временную зону даты")
         return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def resolve_publication(self) -> "LinkedInJob":
+        if self.publication_label:
+            # Only a label observed on the live job page may be supplied. An
+            # older bound plus a five-minute margin avoids claiming an exact time.
+            label = self.publication_label.strip().casefold()
+            if label in {"just now", "reposted just now"}:
+                age = timedelta(minutes=6)
+            else:
+                match = re.fullmatch(r"(?:reposted\s+)?(\d{1,4})\s+(minute|hour|day)s?\s+ago", label)
+                if not match:
+                    raise ValueError("Use the live English publication label or an absolute date")
+                amount, unit = int(match.group(1)), match.group(2)
+                age = timedelta(**{unit + "s": amount + 1}) + timedelta(minutes=5)
+            if age >= timedelta(hours=72):
+                raise ValueError("The relative age does not establish freshness within 72 hours")
+            derived = self.verified_at - age
+            if self.published_at is not None and self.published_at != derived:
+                raise ValueError("A relative label must use its conservative publication bound")
+            self.published_at = derived
+        if self.published_at is None:
+            raise ValueError("Publication date or live publication label is required")
+        return self
 
 
 def candidate_id(url: str) -> str:
@@ -73,11 +100,12 @@ def process_candidates(session_factory: Any = SessionLocal) -> None:
             try:
                 item = LinkedInJob.model_validate(row.data)
                 current = now()
+                assert item.published_at is not None
                 if not (current - timedelta(hours=WINDOW_HOURS) <= item.published_at <= item.verified_at <= current
                         and item.verified_at >= current - timedelta(hours=24)):
                     row.status, row.result = "excluded", {"reason": "Публикация старше 72 часов, дата будущая или проверка устарела"}
                 else:
-                    job = JobInput(**item.model_dump(exclude={"verified_at", "date_evidence"}), provider="linkedin",
+                    job = JobInput(**item.model_dump(exclude={"verified_at", "date_evidence", "publication_label"}), provider="linkedin",
                                    external_id=item.canonical_url.rsplit("/", 1)[-1])
                     best: dict[str, Any] | None = None
                     best_search: SavedSearch | None = None
@@ -88,6 +116,8 @@ def process_candidates(session_factory: Any = SessionLocal) -> None:
                             results, _ = make_results(db, search, [job], filters_override=filters)
                         except ValueError:
                             continue
+                        if results:
+                            results[0]["publication_label"] = item.publication_label
                         if results and (best is None or results[0]["score"] > best["score"]):
                             best, best_search = results[0], search
                     if best is not None and best_search is not None:

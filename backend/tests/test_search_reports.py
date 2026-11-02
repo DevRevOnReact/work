@@ -151,9 +151,10 @@ def test_linkedin_report_sql_is_idempotent_bounded_and_valid_for_existing_outbox
     record = {"run_started_at": now().isoformat(), "checked": 4, "verified": 0,
               "inserted": 0, "accepted": 0, "pending": 0, "error": "source_unavailable"}
     sql = prepare(record)
+    assert "INSERT INTO" in prepare({**record, "checked": 40})
     assert sql == prepare(record) and "ON CONFLICT (id) DO NOTHING" in sql
     assert "INSERT INTO search_notifications" in sql
-    for override in ({"checked": 13}, {"accepted": 1}, {"checked": True},
+    for override in ({"checked": 41}, {"accepted": 1}, {"checked": True},
                      {"error": "arbitrary secret"}, {"run_started_at": "2026-01-01T00:00:00Z"}):
         with pytest.raises(ValueError):
             prepare({**record, **override})

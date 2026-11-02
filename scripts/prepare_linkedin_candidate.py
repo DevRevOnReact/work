@@ -17,6 +17,7 @@ def prepare(record: dict) -> str:
     from datetime import timedelta
     item = LinkedInJob.model_validate(record)
     current = now()
+    assert item.published_at is not None
     if not current - timedelta(hours=72) <= item.published_at <= item.verified_at <= current:
         raise ValueError("Publication is not verified within the current 72-hour window")
     if item.verified_at < current - timedelta(hours=24):
