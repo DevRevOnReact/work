@@ -10,6 +10,7 @@ const splitLines = (value: string) => [...new Set(value.split(/[\n,]+/).map(item
 function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => void}) {
   const client = useQueryClient();
   const [automatic, setAutomatic] = useState(settings.mode === "autonomous" && settings.auto_apply && settings.enabled);
+  const [review, setReview] = useState(settings.required_approval_categories);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   return <form onSubmit={event => {event.preventDefault(); const data = new FormData(event.currentTarget);
@@ -20,7 +21,7 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
       use_supported_sites: true, authorized_domains: domains,
       min_score: Number(data.get("min_score")), daily_limit: Number(data.get("daily_limit")),
       excluded_companies: splitLines(String(data.get("excluded_companies") || "")),
-      required_approval_categories: data.getAll("review"),
+      required_approval_categories: review,
     }).then(async () => {onSaved(); await client.invalidateQueries({queryKey: ["automation-settings"]});})
       .catch(e => setError(e instanceof Error ? e.message : "Не удалось сохранить настройки"))
       .finally(() => setPending(false));
@@ -28,8 +29,9 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
     <div className="automation-choice">
       <label className="check-label"><input type="checkbox" role="switch" checked={automatic}
         onChange={e => {setAutomatic(e.target.checked); setError("");}}/><strong>Отправлять подходящие отклики автоматически</strong></label>
-      <p>{automatic ? "JobPilot подберёт резюме под вакансию и отправит отклик без подтверждения каждого раза." :
+      <p>{automatic ? (review.length ? "JobPilot подберёт резюме и заполнит форму. Для выбранных категорий ответов запросит подтверждение." : "JobPilot подберёт резюме под вакансию и отправит отклик без подтверждения каждого раза.") :
         "Автоотправка выключена. Вы сами выбираете вакансию и подтверждаете отправку."}</p>
+      {automatic && review.length > 0 && <button className="text-button" type="button" onClick={() => setReview([])}>Использовать подтверждённые ответы без дополнительных вопросов</button>}
     </div>
     <p className="hint">Учитываются содержание загруженных резюме, требования вакансии и данные профиля. Если сведений не хватает или сайт требует участия человека, отклик остановится и попросит вашей помощи.</p>
     {automatic && <div className="form-grid two">
@@ -39,13 +41,12 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
     {!automatic && <><input type="hidden" name="daily_limit" value={settings.daily_limit}/><input type="hidden" name="min_score" value={settings.min_score}/></>}
     <details><summary>Дополнительные настройки</summary>
       <p className="hint">Поддерживаемые сайты вакансий доступны автоматически. Другие сайты можно добавить по точному домену.</p>
-      <label>Дополнительные сайты<textarea name="authorized_domains" rows={2} defaultValue={settings.authorized_domains.filter(domain => !settings.supported_domains.includes(domain)).join("\n")}/><small>Например, careers.example.com; по одному домену на строку.</small></label>
+      <label>Дополнительные сайты<textarea name="authorized_domains" rows={2} defaultValue={settings.authorized_domains.filter(domain => !(settings.supported_domains || []).includes(domain)).join("\n")}/><small>Например, careers.example.com; по одному домену на строку.</small></label>
       <label>Не откликаться в эти компании<textarea name="excluded_companies" rows={2} defaultValue={settings.excluded_companies.join("\n")}/></label>
       <p>Спрашивать перед отправкой, если встречаются:</p>
-      {[["legal", "Право на работу и согласия"], ["salary", "Зарплатные ожидания"], ["personal", "Личные сведения"]].map(([value, label]) =>
+      {[["legal", "Право на работу и согласия"], ["salary", "Зарплатные ожидания"], ["personal", "Личные сведения"], ["all", "Любая заявка"]].map(([value, label]) =>
         <label className="check-label" key={value}><input type="checkbox" name="review" value={value}
-          defaultChecked={settings.required_approval_categories.includes(value)}/>{label}</label>)}
-      {settings.required_approval_categories.includes("all") && <input type="hidden" name="review" value="all"/>}
+          checked={review.includes(value)} onChange={event => setReview(current => event.target.checked ? [...current, value] : current.filter(item => item !== value))}/>{label}</label>)}
       <p className="hint">Неподтверждённые сведения всегда требуют вашего ответа.</p>
     </details>
     {error && <p className="notice error" role="alert">{error}</p>}

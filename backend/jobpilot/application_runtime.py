@@ -13,13 +13,14 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import select, text, update
 
 from . import automation as flow
-from .answers import AnswerEngine, NeedsAttention
+from .answers import AnswerEngine, NeedsAttention, RetryLater
 from .config import settings
 from .db import SessionLocal
 from .domain import Profile
@@ -104,7 +105,29 @@ class ApplicationRuntime:
             except Exception:
                 pass
             finally:
-                await browser.playwright.stop()
+                try:
+                    await browser.playwright.stop()
+                except Exception:
+                    log.warning("Could not stop application browser", exc_info=True)
+
+    async def make_room(self) -> bool:
+        """Release a waiting browser; its persisted application remains resumable."""
+        if len(self.sessions) < settings().application_session_limit:
+            return True
+        with self.session_factory() as db:
+            waiting = [app for app in db.scalars(select(Application).where(
+                Application.id.in_(self.sessions), Application.state.in_(flow.WAIT_STATES | {"SUBMISSION_UNCERTAIN"})))
+                if not app.command]
+            if not waiting:
+                return False
+            # Keep review/verification sessions as long as possible.
+            app = min(waiting, key=lambda item: (
+                item.state not in {"PAUSED", "NEEDS_HUMAN_ACTION"}, self.sessions[item.id].expires))
+            application_id = app.id
+            app.progress = {**app.progress, "browser_status": "closed"}
+            db.commit()
+        await self.close(application_id)
+        return True
 
     async def tick(self) -> None:
         # Commands are persisted and observed even when the browser process died.
@@ -112,8 +135,7 @@ class ApplicationRuntime:
             commands = [(a.id, a.command) for a in db.scalars(select(Application).where(Application.command.is_not(None)))]
         for application_id, command in commands:
             if command in {"cancel", "pause"}:
-                if command == "cancel":
-                    await self.close(application_id)
+                await self.close(application_id)
                 with self.session_factory() as db:
                     db.execute(update(Application).where(Application.id == application_id,
                         Application.command == command).values(command=None))
@@ -150,12 +172,13 @@ class ApplicationRuntime:
             self.select_eligible()
             self.last_selection = time.monotonic()
         with self.session_factory() as db:
-            queued = list(db.scalars(select(Application.id).where(Application.state == "QUEUED")
-                                     .order_by(Application.created_at).limit(20)))
+            queued = [app.id for app in db.scalars(select(Application).where(Application.state == "QUEUED")
+                       .order_by(Application.created_at))
+                      if not app.progress.get("retry_at") or app.progress["retry_at"] <= now().isoformat()][:20]
         for application_id in queued:
             if self.stopping.is_set():
                 return
-            if application_id not in self.sessions and len(self.sessions) >= settings().application_session_limit:
+            if application_id not in self.sessions and not await self.make_room():
                 break
             with self.session_factory() as db:
                 if not flow.claim(db, application_id):
@@ -166,20 +189,26 @@ class ApplicationRuntime:
                 await self.failure(application_id, exc)
 
     def select_eligible(self) -> None:
-        from .top_vacancies import top_rows
-        from .tailoring import select_resume
         from .domain import evaluate
         from .services import job_input
+        from .tailoring import resume_contexts, select_resume
+        from .top_vacancies import top_rows
         with self.session_factory() as db:
             control = db.get(Control, 1)
             if not control or not control.enabled or control.mode == "manual":
                 return
             if control.mode == "autonomous" and not control.auto_apply:
                 return
+            remaining, _ = flow.submission_budget(db, control)
+            if not remaining:
+                return
             candidate = db.get(Candidate, 1)
             if not candidate:
                 return
             profile = Profile.model_validate(candidate.facts)
+            contexts = resume_contexts(db, profile)
+            if not contexts:
+                return
             records = [row.data for row in top_rows(db)]
             for search in db.scalars(select(SavedSearch).where(SavedSearch.enabled.is_(True))):
                 records.extend(search.results)
@@ -197,14 +226,14 @@ class ApplicationRuntime:
                     existing = db.scalar(select(Application).where(Application.job_id == job.id))
                     if existing and (existing.attempt_id or existing.submit_intent_at):
                         continue
-                    _, selected_profile = select_resume(db, job, profile)
+                    _, selected_profile = select_resume(db, job, profile, contexts=contexts)
                     match = evaluate(job_input(job), selected_profile)
                     if (match["score"] < control.min_score or match["eligibility"] != "eligible"
                             or not match.get("recommendable", True)):
                         continue
                     flow.request_application(db, job, control.mode)
                     queued += 1
-                    if queued >= min(control.daily_limit, 10):
+                    if queued >= min(remaining, 10):
                         break
                 except (ValueError, NeedsAttention):
                     continue
@@ -322,7 +351,7 @@ class ApplicationRuntime:
             assert app is not None
             job, candidate = db.get(Job, app.job_id), db.get(Candidate, 1)
             assert job and candidate
-            flow.set_step(db, app, "PREPARING", "Выбираем подходящее загруженное резюме")
+            flow.set_step(db, app, "PREPARING", "Выбираем подходящее загруженное резюме", retry_at=None, blocked_host=None)
             db.commit()
             resume, profile = select_resume(db, job, Profile.model_validate(candidate.facts))
             flow.policy_check(db, app, job, profile)
@@ -491,12 +520,36 @@ class ApplicationRuntime:
                 db.commit()
 
     async def failure(self, application_id: str, exc: Exception) -> None:
+        from playwright.async_api import Error as BrowserError, TimeoutError as BrowserTimeout
+
         browser = self.sessions.get(application_id)
+        close_browser = False
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             if not app:
                 return
             if app.state in {"CANCELLED", "PAUSED"}:
+                return
+            if isinstance(exc, RetryLater) and not app.submit_intent_at:
+                flow.set_step(db, app, "QUEUED", str(exc), retry_at=exc.retry_at.isoformat(),
+                              browser_status="closed", error_code="daily_limit")
+                app.command = None
+                db.commit()
+                await self.close(application_id)
+                return
+            transient = isinstance(exc, (TimeoutError, ConnectionError, BrowserTimeout)) or (
+                isinstance(exc, BrowserError) and any(reason in str(exc) for reason in (
+                    "net::ERR_CONNECTION", "net::ERR_TIMED_OUT", "net::ERR_NETWORK_CHANGED",
+                    "net::ERR_NAME_NOT_RESOLVED", "Target page, context or browser has been closed")))
+            retries = app.progress.get("retry_count", 0)
+            if transient and not app.submit_intent_at and retries < 2 and not self.stopping.is_set():
+                delay = 15 * (3 ** retries)
+                flow.set_step(db, app, "QUEUED", f"Временный сбой. Повторим подготовку через {delay} сек.",
+                              retry_count=retries + 1, retry_at=(now() + timedelta(seconds=delay)).isoformat(),
+                              browser_status="closed", error_code="temporary_failure")
+                app.command = None
+                db.commit()
+                await self.close(application_id)
                 return
             message = str(exc)[:1500] if isinstance(exc, (NeedsAttention, ValueError)) else f"Ошибка браузера: {type(exc).__name__}. Возобновите отклик после проверки."
             state = "SUBMISSION_UNCERTAIN" if app.submit_intent_at else "NEEDS_HUMAN_ACTION" if isinstance(exc, (NeedsAttention, ValueError)) else "FAILED"
@@ -512,11 +565,16 @@ class ApplicationRuntime:
                     pass
             flow.set_step(db, app, state, message, fields=questions,
                           questions=[q.get("question", "") for q in questions],
+                          retry_at=None, error_code="submission_uncertain" if app.submit_intent_at else
+                          "needs_input" if isinstance(exc, (NeedsAttention, ValueError)) else "preparation_failed",
                           browser_status="waiting" if browser else "closed")
+            close_browser = state == "FAILED" or (state == "NEEDS_HUMAN_ACTION" and settings().application_browser_headless)
+            if close_browser:
+                app.progress = {**app.progress, "browser_status": "closed"}
             app.command = None
             job = db.get(Job, app.job_id)
             if job:
                 flow.notify(db, app, job, "Требуется действие: " + message[:500])
             db.commit()
-        if state == "FAILED":
+        if close_browser:
             await self.close(application_id)

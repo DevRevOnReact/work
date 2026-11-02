@@ -25,20 +25,14 @@ def _job_input(job: Job | JobInput) -> JobInput:
     return job_input(job) if isinstance(job, Job) else job
 
 
-def select_resume(db: Session, job: Job | JobInput, profile: Profile) -> tuple[Resume, Profile]:
-    """Select the best intact upload without changing the candidate's active CV.
-
-    Professional evidence comes exclusively from each original document. Explicit
-    contact details and application preferences come from the verified profile.
-    Unreadable or tampered uploads are skipped; no valid upload is a hard blocker.
-    """
+def resume_contexts(db: Session, profile: Profile) -> list[tuple[Resume, Profile]]:
+    """Read and verify each upload once for a batch of vacancy evaluations."""
     shared = (
         "full_name", "email", "phone", "location", "search_locations", "portfolio",
         "linkedin", "github", "work_authorization", "relocation", "salary_expectation",
         "notice_period", "legal_answers",
     )
-    ranked: list[tuple[tuple[int, int, int, int], Resume, Profile]] = []
-    vacancy = _job_input(job)
+    contexts = []
     for resume in db.scalars(select(Resume).order_by(Resume.created_at.desc(), Resume.id)):
         try:
             parsed = parse_resume(read_file(db, resume), resume.filename)
@@ -52,6 +46,16 @@ def select_resume(db: Session, job: Job | JobInput, profile: Profile) -> tuple[R
         facts.update(active_resume_id=resume.id, resume_text=parsed.text,
                      resume_filename=resume.filename, resume_parse_warnings=parsed.warnings)
         context = Profile.model_validate(facts)
+        contexts.append((resume, context))
+    return contexts
+
+
+def select_resume(db: Session, job: Job | JobInput, profile: Profile, *,
+                  contexts: list[tuple[Resume, Profile]] | None = None) -> tuple[Resume, Profile]:
+    """Rank intact uploads using document facts and verified shared preferences."""
+    ranked: list[tuple[tuple[int, int, int, int], Resume, Profile]] = []
+    vacancy = _job_input(job)
+    for resume, context in resume_contexts(db, profile) if contexts is None else contexts:
         result = evaluate(vacancy, context)
         # A high textual score cannot override a missing mandatory qualification.
         # Prefer documents that can actually satisfy application policy first.

@@ -2,6 +2,7 @@ import json
 import math
 import re
 import unicodedata
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -12,6 +13,12 @@ from .domain import SKILL_ALIASES, Profile, _contains
 
 class NeedsAttention(Exception):
     pass
+
+
+class RetryLater(NeedsAttention):
+    def __init__(self, message: str, retry_at: datetime):
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 def normalize(question: str) -> str:

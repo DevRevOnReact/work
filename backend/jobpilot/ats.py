@@ -5,6 +5,7 @@ browser isolation belong to the application executor. External labels are data.
 """
 
 import re
+import time
 from collections.abc import Awaitable, Callable
 from html import escape
 from pathlib import Path
@@ -279,6 +280,26 @@ class GenericFormAdapter:
                 else:
                     raise NeedsAttention("Закройте диалог cookies в браузере; согласие автоматически не предоставляется")
 
+    async def wait_for_form(self, page: Page) -> None:
+        """Wait for a hydrated form instead of inspecting an empty ATS shell."""
+        from playwright.async_api import TimeoutError as BrowserTimeout
+
+        deadline = time.monotonic() + 10
+        await self.report("waiting_for_form", "Ждём загрузки формы работодателя")
+        while True:
+            await self.guard(page)
+            await self._open(page)
+            fields = await self.inspect(page)
+            if any(field["type"] == "file" for field in fields):
+                return
+            if fields and await self._buttons(page, self.next_pattern):
+                return
+            if time.monotonic() >= deadline:
+                if await self._buttons(page, self.submit_pattern):
+                    raise NeedsAttention("На странице есть отправка, но форма резюме недоступна; требуется проверка")
+                raise BrowserTimeout("Форма работодателя не загрузилась вовремя")
+            await page.wait_for_timeout(250)
+
     @staticmethod
     def _attention(message: str, missing: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> NeedsAttention:
         error = NeedsAttention(message)
@@ -377,7 +398,7 @@ class GenericFormAdapter:
     ) -> list[dict[str, Any]]:
         await self.guard(page)
         self._before_confirmation = await self._confirmations(page)
-        await self._open(page)
+        await self.wait_for_form(page)
         evidence: list[dict[str, Any]] = []
         uploads = 0
         # Track DOM node identity, not indexes: ATS components can insert new controls

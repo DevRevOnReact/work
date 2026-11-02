@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { ApplicationDetail } from "@/lib/types";
@@ -23,7 +23,7 @@ function artifactUrl(path: string | null) {
   return null;
 }
 
-export function ApplicationPanel({applicationId}: {applicationId: string}) {
+export function ApplicationPanel({applicationId, redirectOnBlock = false}: {applicationId: string; redirectOnBlock?: boolean}) {
   const client = useQueryClient();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -32,6 +32,18 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
     queryFn: () => api(`automation/applications/${applicationId}`), retry: false,
     refetchInterval: state => running.has(state.state.data?.state || "") ? 2000 : 10000});
   const app = query.data;
+  const previousState = useRef<string | null>(null);
+  useEffect(() => {
+    const state = app?.state;
+    if (!state) return;
+    const wasRunning = previousState.current !== null && running.has(previousState.current);
+    previousState.current = state;
+    if (!redirectOnBlock || app.mode === "autonomous" || state !== "NEEDS_HUMAN_ACTION" || !wasRunning || !app.job.canonical_url) return;
+    try {
+      const destination = new URL(app.job.canonical_url);
+      if (destination.protocol === "https:") window.location.assign(destination.href);
+    } catch { /* An invalid destination is shown without a link below. */ }
+  }, [app?.state, app?.mode, app?.job.canonical_url, redirectOnBlock]);
   async function perform(action: string) {
     if (!app) return;
     setPending(true); setError(""); setMessage("");
@@ -49,27 +61,33 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
   const screenshot = artifactUrl(app.screenshot_url);
   const question = app.progress?.question || app.progress?.questions?.[0] || "";
   const uncertain = app.state === "SUBMISSION_UNCERTAIN";
+  let employerUrl: string | null = null;
+  try {
+    const destination = new URL(app.job.canonical_url);
+    if (destination.protocol === "https:") employerUrl = destination.href;
+  } catch { /* Do not render invalid URLs. */ }
   return <section className="application-panel" aria-label={`Отклик: ${app.job.title}`}>
     <div className="panel-heading"><h3>Автоматический отклик</h3><span className="badge purple" role="status">{labels[app.state] || app.state}</span></div>
     <p aria-live="polite">{app.progress?.message || app.progress?.step || "Ожидаем обновления агента"}</p>
     {app.progress?.browser_status && <small>Браузер агента: {({active: "выполняет действие", waiting: "ожидает вашего действия", closed: "сессия завершена"} as Record<string, string>)[app.progress.browser_status] || app.progress.browser_status}</small>}
-    {app.progress?.blocked_host && <p className="notice error">Заблокировано обращение к домену <strong>{app.progress.blocked_host}</strong>. Проверьте, что домен принадлежит работодателю или его сервису найма. Если разрешаете передавать ему данные, добавьте этот точный домен в настройках автоматических откликов в разделе «Резюме и профиль».</p>}
+    {app.progress?.blocked_host && <p className="notice error">Сайт использует проверку или обращается к неподдерживаемому сервису ({app.progress.blocked_host}). Откройте вакансию и продолжите отклик на сайте работодателя.</p>}
     {app.attention && <p className="notice error" role="alert">{app.attention}</p>}
-    {app.state === "NEEDS_HUMAN_ACTION" && <p className="hint">CAPTCHA, вход и другие проверки пройдите в окне браузера агента на компьютере, где запущен JobPilot, затем нажмите «Продолжить подготовку». Ссылка на работодателя открывает отдельную сессию. При работе на сервере нужен доступ к его браузеру.</p>}
+    {app.state === "NEEDS_HUMAN_ACTION" && <p className="hint">Откройте вакансию и завершите отклик на сайте работодателя. Это отдельная сессия: проверка на сайте не продолжит работу браузера агента автоматически.</p>}
     {(error || query.error) && <p className="notice error" role="alert">{error || query.error?.message}</p>}
     {message && <p className="notice" role="status">{message}</p>}
     {app.state === "SUBMITTED" && <p className="notice">Сайт подтвердил отправку{app.submitted_at ? ` · ${new Date(app.submitted_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"})} (Москва)` : ""}.</p>}
     {uncertain && <p className="hint">Запрос мог дойти до работодателя. Агент проверит подтверждение; повторная отправка заблокирована.</p>}
     <div className="button-row">
+      {app.state === "NEEDS_HUMAN_ACTION" && employerUrl && <a className="button primary" href={employerUrl}>Перейти к вакансии ↗</a>}
       {resume && <a className="button" href={resume} target="_blank" rel="noreferrer">Открыть подготовленное резюме ↗</a>}
       {app.resume_id && <a href={`/api/backend/resumes/${encodeURIComponent(app.resume_id)}/file`} target="_blank" rel="noreferrer">Исходное резюме ↗</a>}
-      <a href={app.job.canonical_url} target="_blank" rel="noreferrer">Страница работодателя ↗</a>
+      {app.state !== "NEEDS_HUMAN_ACTION" && employerUrl && <a href={employerUrl} target="_blank" rel="noreferrer">Страница работодателя ↗</a>}
     </div>
     {app.answers?.length > 0 && <details open={app.state === "AWAITING_APPROVAL"}><summary>Подготовленные ответы ({app.answers.length})</summary>
       <dl className="application-answers">{app.answers.map((answer, i) => <div key={`${answer.question}-${i}`}><dt>{answer.question}</dt><dd>{answer.answer}</dd></div>)}</dl></details>}
     {screenshot && <details><summary>Последнее состояние браузера</summary><a href={screenshot} target="_blank" rel="noreferrer">
       <img className="application-screenshot" src={screenshot} alt="Последний снимок формы отклика" loading="lazy"/></a></details>}
-    {app.state === "NEEDS_HUMAN_ACTION" && <details open={Boolean(question)}><summary>Подтвердить ответ для этой и будущих заявок</summary>
+    {app.state === "NEEDS_HUMAN_ACTION" && question && <details open><summary>Подтвердить ответ для этой и будущих заявок</summary>
       <form key={question} onSubmit={e => {e.preventDefault(); const form = e.currentTarget; const body = new FormData(form);
         setPending(true); setError(""); setMessage("");
         void api("answers", "POST", {question: String(body.get("question")).trim(), answer: String(body.get("answer")).trim()})
@@ -113,5 +131,5 @@ export function AutoApplyButton({canonicalUrl}: {canonicalUrl: string}) {
   return <div className="auto-apply"><button className="button primary" disabled={pending} aria-expanded={open}
     onClick={() => void start()}>{pending ? "Запускаем агента…" : applicationId ? open ? "Скрыть отклик" : "Открыть отклик" : "Auto Apply"}</button>
     {error && <p className="notice error" role="alert">{error}</p>}
-    {open && applicationId && <ApplicationPanel applicationId={applicationId}/>}</div>;
+    {open && applicationId && <ApplicationPanel applicationId={applicationId} redirectOnBlock/>}</div>;
 }

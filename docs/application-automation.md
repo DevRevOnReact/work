@@ -8,6 +8,14 @@ Native: install existing runtime dependencies, `pip install playwright==1.64.0`,
 
 Use a single API process (`--workers 1`). Its independent browser thread owns up to three live review/intervention sessions and observes persisted commands every two seconds. The existing search scheduler continues separately. A blocked or awaiting-approval application releases processing so other applications can progress, until the live-session limit is reached. Waiting sessions expire after 15 minutes; resuming reconstructs the form. Cookies and credentials are never persisted by this executor.
 
+Temporary network/browser timeouts before submit are retried at most twice, after 15 and 45 seconds. The retry count and due time are persisted, so restarting the dispatcher does not reset the budget. Unknown exceptions and missing candidate facts stop that application. No failure after a committed submit intent can be retried. Manual resume starts a new preparation retry budget. Headless sessions needing input close immediately; when capacity is full, a waiting browser can be released while its application and artifacts remain available for later reconstruction. Pausing also releases its browser.
+
+At the daily limit, preparation is deferred until midnight in the configured search timezone. The dispatcher stops adding new autonomous applications until budget is available. Existing deferred applications resume automatically the next day, without clearing the daily submit fence or requiring a human action.
+
+Autonomous selection re-evaluates saved vacancies against intact uploaded resumes, rather than trusting a stale search score. Documents are read once per selection batch. Clicking an individual application uses the saved automation mode too. Additional approval categories are preserved until explicitly changed; the settings provide a single action to use confirmed answers without additional review. Unsupported personal/legal declarations still require explicit facts. A blocked manual application opened from a vacancy can redirect to the employer; autonomous background applications and history views do not navigate away from the dashboard.
+
+The browser runtime only runs while the API service is running. Render Free sleeps on idle; scheduled vacancy searches in GitHub do not themselves provide an always-running application executor. Continuous unattended application processing needs an always-running host. The executor recovers known transient failures; it does not modify or deploy its own source code.
+
 ## Endpoints
 
 All routes reuse the existing API authentication and frontend write-origin protection.

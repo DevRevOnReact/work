@@ -60,6 +60,22 @@ async def test_unknown_required_question_and_captcha_block(tmp_path):
         await browser.close()
 
 
+async def test_delayed_form_hydration_waits_before_reporting_missing_resume(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content("<body><p>Loading application…</p></body>")
+        await page.evaluate("html => setTimeout(() => {document.body.innerHTML = html}, 1000)", FORM)
+        adapter = GreenhouseAdapter()
+        answers = await adapter.prepare(page, resume, AnswerEngine(
+            Profile(full_name="Test Candidate", email="test@example.invalid", skills=["React"]), {}), "React")
+        assert answers and await page.locator('input[type=file]').evaluate("el => el.files.length") == 1
+        assert await page.evaluate("window.submissions || 0") == 0
+        await browser.close()
+
+
 async def test_russian_form_and_generated_required_cover_letter(tmp_path):
     resume = tmp_path / "cv.pdf"
     resume.write_bytes(b"%PDF-1.4\n%%EOF")

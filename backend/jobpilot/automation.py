@@ -6,7 +6,7 @@ submit_intent_at is an irreversible fence against all automatic re-submission.
 import hashlib
 import json
 import re
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -142,6 +142,14 @@ def request_application(db: Session, job: Job, mode: str = "manual") -> Applicat
     return app
 
 
+def submission_budget(db: Session, control: Control) -> tuple[int, datetime]:
+    zone = ZoneInfo(settings().search_timezone)
+    local_start = now().astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    count = db.scalar(select(func.count()).select_from(Application).where(
+        Application.submit_intent_at >= local_start.astimezone(UTC))) or 0
+    return max(0, control.daily_limit - count), (local_start + timedelta(days=1)).astimezone(UTC)
+
+
 def policy_check(db: Session, app: Application, job: Job, profile: Profile, *, submitting: bool = False) -> None:
     from .answers import NeedsAttention
     control = db.get(Control, 1, populate_existing=True)
@@ -164,11 +172,10 @@ def policy_check(db: Session, app: Application, job: Job, profile: Profile, *, s
     if not profile.full_name or not profile.email:
         raise NeedsAttention("Укажите полное имя и email в профиле")
     if submitting:
-        zone = ZoneInfo(settings().search_timezone)
-        start = now().astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
-        count = db.scalar(select(func.count()).select_from(Application).where(Application.submit_intent_at >= start)) or 0
-        if count >= control.daily_limit:
-            raise NeedsAttention("Достигнут дневной лимит отправок; продолжите в другой день")
+        from .answers import RetryLater
+        remaining, reset_at = submission_budget(db, control)
+        if not remaining:
+            raise RetryLater("Достигнут дневной лимит отправок. Продолжим автоматически завтра.", reset_at)
 
 
 def approval_categories(answers: list[dict[str, Any]]) -> set[str]:
@@ -223,6 +230,7 @@ def command(db: Session, app: Application, action: str, approval_token: str | No
             raise ValueError("Отклик уже выполняется")
         app.command = "resume"
         app.approved_fingerprint = None
+        app.progress = {**app.progress, "retry_count": 0, "retry_at": None, "error_code": None}
         set_step(db, app, "QUEUED", "Возобновляем подготовку и проверяем актуальность данных")
     else:
         raise ValueError("Неизвестное действие")

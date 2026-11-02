@@ -300,7 +300,8 @@ async def test_daily_limit_rechecked_at_submission(db, workspace, monkeypatch):
     await runtime.tick()
     db.expire_all()
     app = db.get(Application, app.id)
-    assert app.state == "NEEDS_HUMAN_ACTION" and app.submit_intent_at is None
+    assert app.state == "QUEUED" and app.submit_intent_at is None
+    assert app.progress["retry_at"] and app.progress["error_code"] == "daily_limit"
     assert adapter.submit.await_count == 0
 
 
@@ -623,7 +624,7 @@ def test_selection_rechecks_stale_search_score_against_selected_resume(db, works
     stale = {"canonical_url": workspace.job.canonical_url, "company": workspace.job.company,
              "score": 10, "eligibility": "unknown"}
     monkeypatch.setattr(top_vacancies, "top_rows", lambda db: [SimpleNamespace(data=stale)])
-    monkeypatch.setattr(tailoring, "select_resume", lambda db, job, profile: (workspace.resume, workspace.profile))
+    monkeypatch.setattr(tailoring, "select_resume", lambda db, job, profile, **kwargs: (workspace.resume, workspace.profile))
     monkeypatch.setattr(domain, "evaluate", lambda job, profile: {"score": 90, "eligibility": "eligible", "recommendable": True})
 
     workspace.runtime.select_eligible()
@@ -631,3 +632,86 @@ def test_selection_rechecks_stale_search_score_against_selected_resume(db, works
     db.expire_all()
     app = db.scalar(select(Application).where(Application.job_id == workspace.job.id))
     assert app is not None and app.state == "QUEUED"
+
+
+async def test_transient_preparation_failure_retries_after_delay_without_submission(db, workspace, monkeypatch):
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+    adapter.prepare.side_effect = [TimeoutError("Temporary connection loss"), []]
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.tick()
+    db.expire_all()
+    db.refresh(app)
+    assert app.state == "QUEUED" and app.progress["retry_count"] == 1
+    assert app.id not in workspace.runtime.sessions and app.submit_intent_at is None
+    await workspace.runtime.tick()
+    assert adapter.prepare.await_count == 1  # Backoff survives dispatch cycles.
+    app.progress = {**app.progress, "retry_at": (now() - timedelta(seconds=1)).isoformat()}
+    db.commit()
+    await workspace.runtime.tick()
+    db.expire_all()
+    db.refresh(app)
+    assert app.state == "AWAITING_APPROVAL" and adapter.prepare.await_count == 2
+    assert adapter.submit.await_count == 0
+
+
+async def test_transient_retries_are_bounded_and_manual_resume_resets_budget(db, workspace):
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    for _ in range(3):
+        await workspace.runtime.failure(app.id, TimeoutError("network"))
+    db.expire_all()
+    db.refresh(app)
+    assert app.state == "FAILED" and app.progress["retry_count"] == 2
+    flow.command(db, app, "resume")
+    assert app.progress["retry_count"] == 0 and app.progress["retry_at"] is None
+
+
+async def test_waiting_application_cannot_starve_queue(db, workspace, monkeypatch):
+    monkeypatch.setattr(settings(), "application_session_limit", 1)
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+    first = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.tick()
+    assert first.id in workspace.runtime.sessions
+    second_job = Job(source_id=workspace.job.source_id, **vacancy(external_id="second",
+                     canonical_url="https://jobs.ashbyhq.com/test/second").model_dump())
+    db.add(second_job)
+    db.flush()
+    second = flow.request_application(db, second_job)
+    db.commit()
+    await workspace.runtime.tick()
+    db.expire_all()
+    db.refresh(first)
+    db.refresh(second)
+    assert first.state == second.state == "AWAITING_APPROVAL"
+    assert first.progress["browser_status"] == "closed"
+    assert second.id in workspace.runtime.sessions and first.id not in workspace.runtime.sessions
+    assert adapter.prepare.await_count == 2 and adapter.submit.await_count == 0
+
+
+def test_click_prepare_respects_saved_autonomous_mode(db, workspace):
+    from jobpilot.automation_api import ApplicationInput, prepare
+
+    workspace.control.mode = "autonomous"
+    workspace.control.auto_apply = True
+    db.commit()
+    result = prepare(ApplicationInput(canonical_url=workspace.job.canonical_url), db)
+    assert result["mode"] == "autonomous"
+
+
+async def test_daily_limit_defers_instead_of_requesting_human_intervention(db, workspace, monkeypatch):
+    from jobpilot.answers import RetryLater
+
+    mock_browser(monkeypatch, workspace.runtime)
+    app = flow.request_application(db, workspace.job, "autonomous")
+    db.commit()
+    reset_at = now() + timedelta(hours=5)
+    await workspace.runtime.failure(app.id, RetryLater("Продолжим завтра", reset_at))
+    db.expire_all()
+    db.refresh(app)
+    assert app.state == "QUEUED" and app.attention is None
+    assert app.progress["retry_at"] == reset_at.isoformat()
+    assert app.submit_intent_at is None
+    await workspace.runtime.tick()
+    assert app.id not in workspace.runtime.sessions

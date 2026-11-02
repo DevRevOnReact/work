@@ -40,3 +40,16 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright==1.64.0
+      - run: python -m playwright install --with-deps chromium
+      - name: Verify application controls and mobile layout
+        run: |
+          npm start > /tmp/jobpilot-ui.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/top > /dev/null; then break; fi
+            sleep 1
+          done
+          python scripts/ui-automation-smoke.py http://127.0.0.1:3000

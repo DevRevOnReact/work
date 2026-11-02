@@ -109,7 +109,9 @@ def prepare(body: ApplicationInput, db: Session = Depends(session)) -> dict[str,
         existing = db.scalar(select(Application).where(Application.job_id == job.id))
         if existing and existing.attempt_id:
             return automation.detail(db, existing)
-        app = automation.request_application(db, job)
+        control = db.get(Control, 1)
+        mode = control.mode if control and control.enabled else "manual"
+        app = automation.request_application(db, job, mode)
         db.commit()
         return automation.detail(db, app)
     except ValueError as exc:

@@ -18,7 +18,7 @@ def main():
         "enabled": True, "mode": "manual", "auto_apply": False, "min_score": 80,
         "daily_limit": 5, "authorized_domains": ["jobs.ashbyhq.com"], "excluded_companies": [],
         "required_approval_categories": ["legal", "salary", "personal"],
-        "browser_available": True, "browser_headless": False,
+        "browser_available": True, "browser_headless": False, "supported_domains": ["jobs.ashbyhq.com"],
     }
     jobs = [{
         "id": str(i), "title": f"Frontend Engineer {i}", "company": "Fixture Employer",
@@ -147,18 +147,20 @@ def main():
         assert sum(action == "approve" for _, action in actions) == 1
 
         page.get_by_role("button", name="Резюме и профиль", exact=True).click()
-        expect(page.get_by_role("heading", name="Автоматические отклики", exact=True)).to_be_visible()
-        toggle = page.get_by_role("switch", name="Отправлять отклики автоматически")
+        expect(page.get_by_role("heading", name="Отклики за вас", exact=True)).to_be_visible()
+        toggle = page.get_by_role("switch", name="Отправлять подходящие отклики автоматически")
         expect(toggle).not_to_be_checked()
         toggle.check()
+        page.get_by_role("button", name="Использовать подтверждённые ответы без дополнительных вопросов").click()
         page.get_by_role("button", name="Включить автоотправку", exact=True).click()
-        expect(page.get_by_text("Автоотправка включена", exact=True)).to_be_visible()
+        expect(page.get_by_text("● Автоотправка включена", exact=True)).to_be_visible()
         assert settings["mode"] == "autonomous" and settings["auto_apply"] is True
         assert settings["use_supported_sites"] is True
+        assert settings["required_approval_categories"] == []
         page.screenshot(path=str(output / "settings-simple.png"), full_page=True)
         toggle.uncheck()
         page.get_by_role("button", name="Сохранить ручной режим", exact=True).click()
-        expect(page.get_by_text("Автоотправка выключена", exact=True)).to_be_visible()
+        expect(page.get_by_text("○ Ручной режим", exact=True)).to_be_visible()
         assert settings["auto_apply"] is False
         page.get_by_label("Страна", exact=True).fill("Georgia")
         page.get_by_label("Подтверждённый статус", exact=False).select_option("yes")
@@ -167,6 +169,29 @@ def main():
         assert profile["work_authorization"] == {"Georgia": True}
         assert approved_answers == [{"question": "Are you authorized to work in Georgia?", "answer": "Yes, confirmed for Georgia."}]
         assert ("fixture-0", "approve") in actions and ("fixture-2", "verify") in actions
+
+        # Autonomous blockers stay on the dashboard; a newly blocked manual
+        # application goes to the employer. All employer traffic is a fixture.
+        apps["fixture-3"] = create(3)
+        apps["fixture-3"].update(state="PREPARING", mode="autonomous", reads=-100)
+        page.goto(f"{base}/top", wait_until="networkidle")
+        fourth = page.locator(".top-vacancy").nth(3)
+        fourth.get_by_role("button", name="Auto Apply", exact=True).click()
+        expect(fourth.get_by_text("Подготовка", exact=True)).to_be_visible()
+        apps["fixture-3"]["state"] = "NEEDS_HUMAN_ACTION"
+        fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
+        expect(fourth.get_by_text("Нужна ваша помощь", exact=True)).to_be_visible()
+        assert page.url == f"{base}/top"
+        expect(fourth.get_by_role("link", name="Перейти к вакансии", exact=False)).to_have_attribute("href", jobs[3]["canonical_url"])
+        expect(fourth.get_by_text("Подтвердить ответ для этой и будущих заявок", exact=True)).to_have_count(0)
+        apps["fixture-3"].update(state="PREPARING", mode="manual")
+        fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
+        expect(fourth.get_by_text("Подготовка", exact=True)).to_be_visible()
+        page.route("https://jobs.ashbyhq.com/**", lambda route: route.fulfill(
+            content_type="text/html", body="<h1>Employer application fixture</h1>"))
+        apps["fixture-3"]["state"] = "NEEDS_HUMAN_ACTION"
+        fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
+        page.wait_for_url(jobs[3]["canonical_url"])
         assert not errors, errors
         browser.close()
     print(json.dumps({"polling": True, "approval": True, "missing_answer": True, "pause_resume_cancel": True,
