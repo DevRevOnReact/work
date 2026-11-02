@@ -137,3 +137,10 @@ textarea:focus-visible { outline:3px solid #b0a0ed; outline-offset:3px; }
 .application-screenshot { display:block; max-width:100%; max-height:420px; object-fit:contain; object-position:left top; border:1px solid var(--border); }
 .application-history { margin-top:24px; }
 .application-history-detail { flex-basis:100%; min-width:0; }
+
+.automation-settings { max-width: 900px; }
+.automation-status { display: inline-block; padding: 4px 10px; border-radius: 20px; background: #f0ecfb; color: #5744a7; font-size: 12px; font-weight: 600; }
+.automation-choice { padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: #faf9fd; }
+.automation-choice p { margin: 8px 0 0 25px; }
+.automation-settings details { margin: 18px 0; }
+.automation-settings details label:not(.check-label) { margin-top: 14px; }

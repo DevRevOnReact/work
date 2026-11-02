@@ -611,3 +611,23 @@ def test_supported_sites_never_imply_auto_send_consent(db):
     with pytest.raises(HTTPException) as error:
         put_settings(AutomationSettings(mode="autonomous", use_supported_sites=True), db)
     assert error.value.status_code == 422
+
+
+def test_selection_rechecks_stale_search_score_against_selected_resume(db, workspace, monkeypatch):
+    from jobpilot import domain, tailoring, top_vacancies
+
+    workspace.control.mode = "autonomous"
+    workspace.control.enabled = workspace.control.auto_apply = True
+    workspace.control.min_score = 80
+    db.commit()
+    stale = {"canonical_url": workspace.job.canonical_url, "company": workspace.job.company,
+             "score": 10, "eligibility": "unknown"}
+    monkeypatch.setattr(top_vacancies, "top_rows", lambda db: [SimpleNamespace(data=stale)])
+    monkeypatch.setattr(tailoring, "select_resume", lambda db, job, profile: (workspace.resume, workspace.profile))
+    monkeypatch.setattr(domain, "evaluate", lambda job, profile: {"score": 90, "eligibility": "eligible", "recommendable": True})
+
+    workspace.runtime.select_eligible()
+
+    db.expire_all()
+    app = db.scalar(select(Application).where(Application.job_id == workspace.job.id))
+    assert app is not None and app.state == "QUEUED"

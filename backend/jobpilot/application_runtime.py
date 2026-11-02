@@ -167,12 +167,19 @@ class ApplicationRuntime:
 
     def select_eligible(self) -> None:
         from .top_vacancies import top_rows
+        from .tailoring import select_resume
+        from .domain import evaluate
+        from .services import job_input
         with self.session_factory() as db:
             control = db.get(Control, 1)
             if not control or not control.enabled or control.mode == "manual":
                 return
             if control.mode == "autonomous" and not control.auto_apply:
                 return
+            candidate = db.get(Candidate, 1)
+            if not candidate:
+                return
+            profile = Profile.model_validate(candidate.facts)
             records = [row.data for row in top_rows(db)]
             for search in db.scalars(select(SavedSearch).where(SavedSearch.enabled.is_(True))):
                 records.extend(search.results)
@@ -180,9 +187,8 @@ class ApplicationRuntime:
             queued = 0
             for record in sorted(records, key=lambda r: -r.get("score", 0)):
                 url = record.get("canonical_url", "")
-                if (not url or url in seen or record.get("score", 0) < control.min_score
-                        or record.get("eligibility") != "eligible" or not record.get("explanation", {}).get("recommendable", True)
-                        or record.get("company", "").strip().casefold() in {c.casefold() for c in control.excluded_companies}):
+                if (not url or url in seen
+                        or record.get("company", "").strip().casefold() in {c.strip().casefold() for c in control.excluded_companies}):
                     continue
                 seen.add(url)
                 try:
@@ -191,11 +197,16 @@ class ApplicationRuntime:
                     existing = db.scalar(select(Application).where(Application.job_id == job.id))
                     if existing and (existing.attempt_id or existing.submit_intent_at):
                         continue
+                    _, selected_profile = select_resume(db, job, profile)
+                    match = evaluate(job_input(job), selected_profile)
+                    if (match["score"] < control.min_score or match["eligibility"] != "eligible"
+                            or not match.get("recommendable", True)):
+                        continue
                     flow.request_application(db, job, control.mode)
                     queued += 1
                     if queued >= min(control.daily_limit, 10):
                         break
-                except ValueError:
+                except (ValueError, NeedsAttention):
                     continue
             db.commit()
 

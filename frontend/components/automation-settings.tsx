@@ -14,12 +14,10 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
   const [error, setError] = useState("");
   return <form onSubmit={event => {event.preventDefault(); const data = new FormData(event.currentTarget);
     const domains = splitLines(String(data.get("authorized_domains") || "")).map(v => v.toLowerCase());
-    const supported = data.get("supported") === "on";
-    if (automatic && !supported && !domains.length) {setError("Выберите поддерживаемые сайты или добавьте сайт работодателя ниже."); return;}
     setPending(true); setError("");
     void api("automation/settings", "PUT", {
       enabled: true, mode: automatic ? "autonomous" : "manual", auto_apply: automatic,
-      use_supported_sites: supported, authorized_domains: domains,
+      use_supported_sites: true, authorized_domains: domains,
       min_score: Number(data.get("min_score")), daily_limit: Number(data.get("daily_limit")),
       excluded_companies: splitLines(String(data.get("excluded_companies") || "")),
       required_approval_categories: data.getAll("review"),
@@ -27,23 +25,27 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
       .catch(e => setError(e instanceof Error ? e.message : "Не удалось сохранить настройки"))
       .finally(() => setPending(false));
   }}><fieldset disabled={pending}>
-    <label className="check-label"><input type="checkbox" role="switch" checked={automatic}
-      onChange={e => {setAutomatic(e.target.checked); setError("");}}/>Отправлять отклики автоматически</label>
-    <p>{automatic ? "JobPilot выберет подходящие вакансии и отправит резюме от вашего имени. Подтверждать каждый отклик не нужно." :
-      "Вы выбираете вакансию, а JobPilot готовит отклик и ждёт вашего разрешения на отправку."}</p>
-    <div className="form-grid two">
-      <label>Откликов в день<input name="daily_limit" type="number" min={1} max={100} required defaultValue={settings.daily_limit}/></label>
-      <label>Совпадение с резюме от<input name="min_score" type="number" min={0} max={100} required defaultValue={settings.min_score}/><small>Баллов из 100</small></label>
+    <div className="automation-choice">
+      <label className="check-label"><input type="checkbox" role="switch" checked={automatic}
+        onChange={e => {setAutomatic(e.target.checked); setError("");}}/><strong>Отправлять подходящие отклики автоматически</strong></label>
+      <p>{automatic ? "JobPilot подберёт резюме под вакансию и отправит отклик без подтверждения каждого раза." :
+        "Автоотправка выключена. Вы сами выбираете вакансию и подтверждаете отправку."}</p>
     </div>
-    <label className="check-label"><input type="checkbox" name="supported" defaultChecked/>Разрешить отклики на Greenhouse, Ashby, Lever, Workable и SmartRecruiters</label>
-    <p className="hint">Резюме и ответы берём из вашего профиля. Если данных не хватает или сайт требует проверку человека, сообщим об этом; остальные вакансии продолжим обрабатывать.</p>
+    <p className="hint">Учитываются содержание загруженных резюме, требования вакансии и данные профиля. Если сведений не хватает или сайт требует участия человека, отклик остановится и попросит вашей помощи.</p>
+    {automatic && <div className="form-grid two">
+      <label>Не больше откликов в день<input name="daily_limit" type="number" min={1} max={100} required defaultValue={settings.daily_limit}/></label>
+      <label>Минимальное совпадение<input name="min_score" type="number" min={0} max={100} required defaultValue={settings.min_score}/><small>От 0 до 100 баллов</small></label>
+    </div>}
+    {!automatic && <><input type="hidden" name="daily_limit" value={settings.daily_limit}/><input type="hidden" name="min_score" value={settings.min_score}/></>}
     <details><summary>Дополнительные настройки</summary>
-      <label>Другие разрешённые сайты<textarea name="authorized_domains" rows={2} defaultValue={settings.authorized_domains.join("\n")}/><small>Необязательно. Точный домен сайта работодателя, по одному на строку.</small></label>
+      <p className="hint">Поддерживаемые сайты вакансий доступны автоматически. Другие сайты можно добавить по точному домену.</p>
+      <label>Дополнительные сайты<textarea name="authorized_domains" rows={2} defaultValue={settings.authorized_domains.filter(domain => !settings.supported_domains.includes(domain)).join("\n")}/><small>Например, careers.example.com; по одному домену на строку.</small></label>
       <label>Не откликаться в эти компании<textarea name="excluded_companies" rows={2} defaultValue={settings.excluded_companies.join("\n")}/></label>
-      <p>Дополнительно спрашивать перед отправкой:</p>
-      {[["legal", "Вопросы о праве на работу и согласиях"], ["salary", "Зарплатные ожидания"], ["personal", "Личные сведения"]].map(([value, label]) =>
+      <p>Спрашивать перед отправкой, если встречаются:</p>
+      {[["legal", "Право на работу и согласия"], ["salary", "Зарплатные ожидания"], ["personal", "Личные сведения"]].map(([value, label]) =>
         <label className="check-label" key={value}><input type="checkbox" name="review" value={value}
-          defaultChecked={settings.mode === "autonomous" && settings.required_approval_categories.includes(value)}/>{label}</label>)}
+          defaultChecked={settings.required_approval_categories.includes(value)}/>{label}</label>)}
+      {settings.required_approval_categories.includes("all") && <input type="hidden" name="review" value="all"/>}
       <p className="hint">Неподтверждённые сведения всегда требуют вашего ответа.</p>
     </details>
     {error && <p className="notice error" role="alert">{error}</p>}
@@ -57,12 +59,12 @@ export function AutomationSettings() {
   const history = useQuery<ApplicationDetail[]>({queryKey: ["automation-applications"], queryFn: () => api("automation/applications"), retry: false, refetchInterval: 10000});
   const [selected, setSelected] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  return <section className="panel padded"><h2>Автоматические отклики</h2>
-    <p>Подготовка документов, заполнение формы и отслеживание подтверждения работодателя.</p>
+  return <section className="panel padded automation-settings"><h2>Отклики за вас</h2>
+    <p>Подбор резюме, заполнение формы и отправка откликов.</p>
     {settings.isPending && <p role="status">Загружаем настройки агента…</p>}
     {settings.error && <p className="notice error" role="alert">{settings.error.message}</p>}
     {settings.data && <>
-      <p role="status">{settings.data.enabled && settings.data.auto_apply ? "Автоотправка включена" : "Автоотправка выключена"}</p>
+      <p className="automation-status" role="status">{settings.data.enabled && settings.data.auto_apply ? "● Автоотправка включена" : "○ Ручной режим"}</p>
       {!settings.data.browser_available && <p className="notice error">Агент временно недоступен. Автоотправку можно включить после восстановления соединения.</p>}
       {saved && <p className="notice" role="status">Параметры автоматических откликов сохранены.</p>}
       <SettingsForm key={JSON.stringify(settings.data)} settings={settings.data} onSaved={() => setSaved(true)}/></>}
@@ -72,7 +74,7 @@ export function AutomationSettings() {
       {history.data?.map(app => <div className="resume-row" key={app.id}><div><strong>{app.job.title}</strong><small>{app.job.company} · {app.state}</small></div>
         <button className="button" aria-expanded={selected === app.id} onClick={() => setSelected(value => value === app.id ? null : app.id)}>Открыть отклик</button>
         {selected === app.id && <div className="application-history-detail"><ApplicationPanel applicationId={app.id}/></div>}</div>)}
-      {history.data?.length === 0 && <p>Откликов пока нет. Выберите вакансию и нажмите «Auto Apply».</p>}
+      {history.data?.length === 0 && <p>Откликов пока нет. Выберите вакансию, чтобы подготовить первый отклик.</p>}
     </details>
   </section>;
 }
