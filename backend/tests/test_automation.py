@@ -381,10 +381,12 @@ async def test_actual_browser_route_guard_blocks_untrusted_writes_and_navigation
     await runtime.open_browser(app.id, workspace.profile, 1, "digest", app.attempt_id, "answers")
     guard = context.route.call_args.args[1]
 
-    async def request(url, method="POST", navigation=False, body=None):
+    async def request(url, method="POST", navigation=False, body=None, frame_url=None):
         route = SimpleNamespace(request=SimpleNamespace(url=url, method=method,
                                 headers={"content-type": "application/json"} if body else {}, post_data=body,
                                 is_navigation_request=lambda: navigation), continue_=AsyncMock(), abort=AsyncMock())
+        if frame_url:
+            route.request.frame = SimpleNamespace(url=frame_url)
         await guard(route)
         return route
 
@@ -404,6 +406,15 @@ async def test_actual_browser_route_guard_blocks_untrusted_writes_and_navigation
     assert native_before_approval.abort.await_count == 1
     graphql_before_approval = await request("https://api.ashbyhq.com/graphql", body='{"operationName":"SubmitApplication"}')
     assert graphql_before_approval.abort.await_count == 1
+    workspace.control.authorized_domains = ["jobs.ashbyhq.com", "job-boards.greenhouse.io"]
+    db.commit()
+    greenhouse_frame = "https://job-boards.greenhouse.io/fixture/jobs/123"
+    redirected_upload = await request("https://boards-api.greenhouse.io/upload", frame_url=greenhouse_frame)
+    assert redirected_upload.continue_.await_count == 1
+    redirected_submit = await request("https://boards-api.greenhouse.io/submit", frame_url=greenhouse_frame)
+    assert redirected_submit.abort.await_count == 1
+    unrelated_provider = await request("https://api.ashbyhq.com/upload", frame_url=greenhouse_frame)
+    assert unrelated_provider.abort.await_count == 1
     for url, method, navigation in [
         ("https://attacker.invalid/steal", "POST", False),
         ("https://127.0.0.1/admin", "GET", False),

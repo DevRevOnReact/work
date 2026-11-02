@@ -62,7 +62,7 @@ class AnswerEngine:
             if normalize(k) and isinstance(v, str) and v.strip()
         }
 
-    def facts(self, russian: bool = False) -> dict[str, str]:
+    def facts(self, russian: bool = False, context: str = "") -> dict[str, str]:
         p = self.profile
         result: dict[str, str] = {}
         for key, ru, en in (
@@ -97,11 +97,21 @@ class AnswerEngine:
         # Stable, bounded excerpts are evidence, never instructions for the model.
         resume = getattr(p, "resume_text", None)
         if isinstance(resume, str):
-            paragraphs = re.split(r"\n\s*\n", resume[:16000].replace("\r\n", "\n"))
-            for i, paragraph in enumerate(p for p in paragraphs if p.strip()):
-                if i >= 12:
-                    break
-                result[f"resume.{i}"] = paragraph.strip()[:1000]
+            chunks: list[str] = []
+            # A plain-text/PDF CV often has no blank lines. Keep the rest of a
+            # long paragraph instead of discarding everything after character 1000.
+            for paragraph in re.split(r"\n\s*\n", resume[:64000].replace("\r\n", "\n")):
+                rest = paragraph.strip()
+                while rest:
+                    boundary = rest.rfind("\n", 0, 1001) if len(rest) > 1000 else len(rest)
+                    if boundary <= 0:
+                        boundary = min(1000, len(rest))
+                    chunks.append(rest[:boundary])
+                    rest = rest[boundary:].strip()
+            tokens = {token for token in normalize(context[:10000]).split() if len(token) > 2}
+            ranked = sorted(enumerate(chunks), key=lambda row: -len(tokens.intersection(normalize(row[1]).split())))
+            for i, paragraph in ranked[:12]:
+                result[f"resume.{i}"] = paragraph
         for key, value in self.approved.items():
             if not LEGAL.search(key):
                 result[f"approved.{key}"] = value
@@ -175,8 +185,11 @@ class AnswerEngine:
             "linkedin": p.linkedin,
             "linkedin profile": p.linkedin,
             "linkedin url": p.linkedin,
+            "linkedin profile url": p.linkedin,
             "github": p.github,
             "github url": p.github,
+            "github profile": p.github,
+            "github profile url": p.github,
             "portfolio": p.portfolio,
             "website": p.portfolio,
             "personal website": p.portfolio,
@@ -219,12 +232,14 @@ class AnswerEngine:
         # A city or free-form location does not establish a country or nationality.
         if q in {"country", "страна", "страна проживания"}:
             raise NeedsAttention(f"В профиле нет отдельного подтвержденного значения страны: {question}")
-        mapped = aliases.get(q, q)
+        contact_question = re.sub(r"^(?:(?:please )?(?:enter|provide|share|add) )?(?:your )?", "", q)
+        contact_question = re.sub(r" (?:optional|required)$", "", contact_question)
+        mapped = aliases.get(contact_question, contact_question)
         if mapped in mapping:
             if not mapping[mapped] or not str(mapping[mapped]).strip():
                 raise NeedsAttention(f"В профиле отсутствуют данные для ответа: {question}")
             return {"question": question, "answer": mapping[mapped], "evidence": [f"profile.{mapped}"]}
-        facts = self.facts(russian)
+        facts = self.facts(russian, question + "\n" + context)
         # Language proficiency is an explicit fact, never inferred from the CV's
         # language, a name or location. More specific certificates need approval.
         if re.fullmatch(
@@ -320,7 +335,8 @@ class AnswerEngine:
                 },
             )
         else:
-            keys = await self.select_facts(question, context, facts)
+            local = self.professional_facts(question, context, facts)
+            keys = local if local is not None else await self.select_facts(question, context, facts)
         if not keys:
             raise NeedsAttention(f"Нет сохраненных фактов для ответа: {question}")
         answer = " ".join(facts[k] for k in keys)
@@ -339,6 +355,35 @@ class AnswerEngine:
             )
             answer = opening + answer + closing
         return {"question": question, "answer": answer, "evidence": keys}
+
+    def professional_facts(self, question: str, context: str, facts: dict[str, str]) -> list[str] | None:
+        """Answer common narrative questions using actual selected-CV excerpts."""
+        q = normalize(question)
+        if re.fullmatch(
+            r"why (?:are you (?:interested|applying)|would you (?:like|be)|do you want|should we hire).*|"
+            r"what (?:makes you|interests you|attracted you).*|"
+            r"почему (?:вас заинтересовал|вы заинтересованы|вы хотите|нам стоит).*", q,
+        ) and re.search(r"\b(?:role|position|job|company|team|work|working|hire|fit|opportunity)\b|ваканс|компан|должност|работ|нас", q):
+            return self.relevant_facts(facts, context)
+        if not (re.search(r"\b(?:project|projects|achievement|achievements)\b|проект|достижен", q)
+                and re.search(r"describe|tell|share|example|опишите|расскажите|пример", q)):
+            return None
+        technologies = [aliases for aliases in SKILL_ALIASES.values()
+                        if any(_contains(alias, question) for alias in aliases)]
+        candidates = {key: value for key, value in facts.items()
+                      if key.startswith(("projects.", "employment.", "resume."))
+                      and (key.startswith("projects.") or re.search(
+                          r"\bbuilt\b|\bdeveloped\b|\bcreated\b|\bimplemented\b|\bdesigned\b|"
+                          r"\bdelivered\b|разработ|создал|создан|внедрил|внедрен|построил", value, re.IGNORECASE))}
+        if not candidates:
+            return None
+        if technologies:
+            candidates = {key: value for key, value in candidates.items()
+                          if any(_contains(alias, value) for aliases in technologies for alias in aliases)}
+            if any(not any(_contains(alias, value) for value in candidates.values() for alias in aliases)
+                   for aliases in technologies):
+                return []
+        return self.relevant_facts(candidates, question + "\n" + context, experience_only=True)[:3]
 
     def technical_answer(self, question: str, russian: bool, facts: dict[str, str]) -> dict[str, Any] | None:
         """Common stack questions need no model and never imply unrecorded tenure."""
@@ -367,8 +412,9 @@ class AnswerEngine:
         if re.search(r"commercial|коммерческ|project|проект|achievement|достижен", q):
             return None
         if not re.fullmatch(
-            r"(?:(?:please )?(?:describe|tell us about|do you have|what is your|your|experience with|experience in).*)|"
-            r"(?:(?:опишите|расскажите|есть ли у вас|ваш опыт|опыт работы с|опыт с).*)",
+            r"(?:(?:please )?(?:describe|tell us about|do you have|have you used|are you familiar with|"
+            r"are you experienced with|are you proficient in|what is your|your|experience with|experience in).*)|"
+            r"(?:(?:опишите|расскажите|есть ли у вас|знакомы ли вы|ваш опыт|опыт работы с|опыт с).*)",
             q,
         ):
             return None
@@ -390,6 +436,38 @@ class AnswerEngine:
                 raise NeedsAttention(f"Нет подтверждённых сведений о технологии {technology}: {question}")
         keys = list(dict.fromkeys(keys))[:4]
         return {"question": question, "answer": " ".join(facts[key] for key in keys), "evidence": keys}
+
+    async def choice_answer(self, question: str, context: str, options: list[str]) -> dict[str, Any]:
+        answer = await self.answer(question, context)
+        normalized = {normalize(option): option for option in options if option.strip()}
+        if normalize(str(answer["answer"])) in normalized:
+            return answer
+        # Only map a positive, unqualified technology question to a binary choice.
+        # Tenure, commercial-use and compound declarations use exact answers.
+        affirmative = next((normalized[key] for key in ("yes", "да") if key in normalized), None)
+        if not affirmative or set(normalized) not in ({"yes", "no"}, {"да", "нет"}):
+            return answer
+        q = normalize(question)
+        technologies = [aliases for aliases in SKILL_ALIASES.values()
+                        if any(_contains(alias, question) for alias in aliases)]
+        if not technologies:
+            return answer
+        names = "(?:" + "|".join(re.escape(normalize(alias)) for aliases in technologies for alias in aliases) + ")"
+        familiar = bool(re.fullmatch(rf"(?:are you familiar with|знакомы ли вы с) {names}", q))
+        experience = bool(re.fullmatch(rf"(?:do you have experience (?:with|in|using) {names}|"
+                                      rf"do you have {names} experience|have you used {names})", q))
+        if not familiar and not experience:
+            return answer
+        facts = self.facts(context=question + "\n" + context)
+        evidence = [facts[key] for key in answer["evidence"] if key in facts
+                    and key.startswith(("projects.", "employment.", "resume."))]
+        if any(re.search(r"\b(?:never|not|no)\b|(?:^|\s)(?:не|нет)\s", value, re.IGNORECASE) for value in evidence):
+            return answer
+        proven_use = any(re.search(r"\bbuilt\b|\bdeveloped\b|\bused\b|\bimplemented\b|разработ|создал|использовал",
+                                  value, re.IGNORECASE) for value in evidence)
+        if familiar or proven_use:
+            return {**answer, "answer": affirmative}
+        return answer
 
     @staticmethod
     def relevant_facts(facts: dict[str, str], context: str, experience_only: bool = False) -> list[str]:

@@ -275,9 +275,10 @@ class ApplicationRuntime:
             control = db.get(Control, 1)
             assert job and control
             url, domains = job.canonical_url, list(control.authorized_domains)
-        host = verified_application_url(url, domains)
+        verified_application_url(url, domains)
         provider = automation_provider(url)
-        adapter = ATS_ADAPTERS.get(provider, GenericFormAdapter)(progress=lambda step, detail: self.record(application_id, step, detail))
+        adapter = ATS_ADAPTERS.get(provider, GenericFormAdapter)(
+            progress=lambda step, detail: self.record(application_id, step, detail), navigation_hosts=set(domains))
         pw = await async_playwright().start()
         try:
             browser = await pw.chromium.launch(headless=settings().application_browser_headless)
@@ -306,11 +307,20 @@ class ApplicationRuntime:
                 enabled = bool(control and control.enabled and current and current.state not in {"CANCELLED", "PAUSED"})
                 has_intent = bool(current and current.submit_intent_at)
                 human_action = bool(current and current.state == "NEEDS_HUMAN_ACTION")
-            trusted = allowed | (ATS_API_HOSTS.get(provider, set()) if host in allowed else set())
+            # Following an authorized Apply link can change ATS provider, including
+            # an embedded application frame. Authorize only that frame's ATS APIs.
+            try:
+                form_url = request.frame.url
+            except Exception:
+                # Service workers are blocked; request mocks have no frame.
+                form_url = getattr(browser_session.page, "url", None) or url
+            form_host = (urlsplit(form_url).hostname or "").lower()
+            current_provider = automation_provider(form_url)
+            trusted = allowed | (ATS_API_HOSTS.get(current_provider, set()) if form_host in allowed else set())
             if request.is_navigation_request() or request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
                 safe = safe and p.hostname in trusted and p.scheme == "https" and enabled
             body = request.post_data if "json" in request.headers.get("content-type", "") else None
-            final_write = is_submission_request(provider, request.url, request.method, body)
+            final_write = is_submission_request(current_provider, request.url, request.method, body)
             native_write = request.is_navigation_request() and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
             authentication = human_action and not final_write and bool(re.search(
                 r"(?:^|/)(?:log-?in|sign-?in|sign_in|authenticate|authentication|oauth2?|sessions?|captcha|challenge|verify)(?:/|$)",
@@ -385,7 +395,7 @@ class ApplicationRuntime:
             engine = AnswerEngine(profile, {a.question: a.answer for a in db.scalars(select(Answer))})
             job = db.get(Job, app.job_id)
             assert job
-            description = job.description
+            description = f"{job.title}\n{job.company}\n{job.description}"
             db.commit()
         answers = await browser.adapter.prepare(browser.page, path.resolve(), engine, description)
         browser.form_snapshot = await browser.adapter.snapshot(browser.page)
@@ -398,9 +408,16 @@ class ApplicationRuntime:
             if candidate.version != version or approved_version(db) != aversion:
                 raise NeedsAttention("Профиль или утверждённые ответы изменились; возобновите подготовку")
             app.answers = answers
+            uploaded_resume = getattr(browser.adapter, "resume_path", None)
+            if uploaded_resume and uploaded_resume.name == "resume.pdf" and uploaded_resume.is_file():
+                flow.store_artifact(db, app, uploaded_resume)
+                app.progress = {**app.progress, "uploaded_resume_filename": "resume.pdf"}
+            else:
+                app.progress = {**app.progress, "uploaded_resume_filename": "resume.docx"}
             flow.store_artifact(db, app, root / "before.png")
             app.progress = {**app.progress, "form_fingerprint": hashlib.sha256(
-                json.dumps(browser.form_snapshot, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+                json.dumps(browser.form_snapshot, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+                "application_url": browser.page.url}
             app.prepared_fingerprint = flow.fingerprint(app, version, digest, browser.page.url)
             categories = flow.approval_categories(answers)
             autonomous = (app.mode == "autonomous" and control.mode == "autonomous" and control.auto_apply
@@ -556,6 +573,7 @@ class ApplicationRuntime:
             questions = getattr(exc, "questions", [])
             app.answers = getattr(exc, "answers", app.answers)
             if browser and browser.page:
+                app.progress = {**app.progress, "application_url": browser.page.url}
                 root = settings().data_dir / "artifacts" / app.id / str(app.attempt_id)
                 try:
                     await browser.page.screenshot(path=str(root / "error.png"), full_page=True)

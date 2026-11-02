@@ -76,6 +76,51 @@ async def test_delayed_form_hydration_waits_before_reporting_missing_resume(tmp_
         await browser.close()
 
 
+async def test_apply_links_to_authorized_ats_stay_in_same_page_and_fill(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    destination = "https://job-boards.greenhouse.io/fixture/jobs/123#application"
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page()
+        await page.route("**/*", lambda route: route.fulfill(content_type="text/html", body=(
+            FORM if route.request.url.startswith(destination.split('#')[0]) else
+            f'<a href="{destination}" target="_blank">Apply on company website</a>'
+            f'<a href="{destination}" target="_blank">Apply now</a>')))
+        await page.goto("https://careers.example.invalid/job/123")
+        adapter = GenericFormAdapter(navigation_hosts={"job-boards.greenhouse.io"})
+        await adapter.prepare(page, resume, AnswerEngine(Profile(full_name="Jane Doe",
+            email="jane@example.invalid", skills=["Python"]), {}), "Python role")
+        assert page.url == destination and len(page.context.pages) == 1
+        assert await page.get_by_label("Email", exact=True).input_value() == "jane@example.invalid"
+        assert await page.evaluate("window.submissions || 0") == 0
+        await browser.close()
+
+
+async def test_application_tab_reveals_hidden_resume_input(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content('<button role="tab" onclick="document.getElementById(\'apply\').hidden=false">Application</button>'
+                               + '<div id="apply" hidden>' + FORM + '</div>')
+        await AshbyAdapter().prepare(page, resume, AnswerEngine(Profile(full_name="Jane Doe",
+            email="jane@example.invalid", skills=["Python"]), {}), "Python role")
+        assert await page.locator('input[type=file]').evaluate("el => el.files.length") == 1
+        assert await page.evaluate("window.submissions || 0") == 0
+        await browser.close()
+
+
+def test_application_navigation_rejects_unapproved_and_malformed_destinations():
+    adapter = GenericFormAdapter(navigation_hosts={"job-boards.greenhouse.io"})
+    source = "https://careers.example.invalid/job/123"
+    for target in ["https://evil.invalid/apply", "https://job-boards.greenhouse.io.evil.invalid/apply",
+                   "https://user:pass@job-boards.greenhouse.io/apply", "javascript:alert(1)",
+                   "https://job-boards.greenhouse.io:bad/apply"]:
+        assert not adapter.can_navigate(target, source)
+
+
 async def test_russian_form_and_generated_required_cover_letter(tmp_path):
     resume = tmp_path / "cv.pdf"
     resume.write_bytes(b"%PDF-1.4\n%%EOF")

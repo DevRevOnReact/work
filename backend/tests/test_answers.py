@@ -14,6 +14,43 @@ async def test_unknown_personal_info_is_never_invented():
         await AnswerEngine(Profile(), {}).answer("Email", "")
 
 
+async def test_professional_project_answer_uses_tail_of_long_selected_resume_without_llm(monkeypatch):
+    async def no_model(*args):
+        pytest.fail("A documented project should work without an LLM")
+
+    monkeypatch.setattr(AnswerEngine, "select_facts", no_model)
+    text = ("Previous background and duties.\n" * 180
+            + "Projects\nBuilt Python payment APIs with PostgreSQL and reduced query latency by 30%.\n")
+    answer = await AnswerEngine(Profile(resume_text=text), {}).answer(
+        "Please describe a relevant Python project", "Python PostgreSQL backend engineer")
+    assert "Built Python payment APIs" in answer["answer"]
+    assert "30%" in answer["answer"]
+    assert answer["evidence"] and all(key.startswith("resume.") for key in answer["evidence"])
+
+
+async def test_company_interest_question_uses_evidence_without_invented_motivation():
+    answer = await AnswerEngine(Profile(skills=["Python", "PostgreSQL"]), {}).answer(
+        "Why are you interested in this position at Example?", "Python PostgreSQL APIs")
+    assert answer["answer"] == "Skills: Python, PostgreSQL."
+    assert "admire" not in answer["answer"] and "Example" not in answer["answer"]
+
+
+async def test_contact_question_variants_use_profile():
+    engine = AnswerEngine(Profile(email="jane@example.invalid", linkedin="https://linkedin.com/in/fixture"), {})
+    assert (await engine.answer("Please enter your email address (required)", ""))["answer"] == "jane@example.invalid"
+    assert (await engine.answer("Your LinkedIn profile URL (optional)", ""))["answer"] == "https://linkedin.com/in/fixture"
+
+
+async def test_technical_binary_choice_requires_matching_evidence():
+    engine = AnswerEngine(Profile(skills=["Python"], resume_text="Built Python APIs."), {})
+    assert (await engine.choice_answer("Do you have experience with Python?", "", ["Yes", "No"]))["answer"] == "Yes"
+    assert (await engine.choice_answer("Are you familiar with Python?", "", ["Yes", "No"]))["answer"] == "Yes"
+    skill_only = AnswerEngine(Profile(skills=["Python"]), {})
+    assert (await skill_only.choice_answer("Do you have experience with Python?", "", ["Yes", "No"]))["answer"] != "Yes"
+    with pytest.raises(NeedsAttention):
+        await engine.choice_answer("Do you have 10 years commercial experience with Python?", "", ["Yes", "No"])
+
+
 async def test_legal_declaration_requires_exact_stored_answer():
     engine = AnswerEngine(Profile(full_name="Test Candidate"), {})
     with pytest.raises(NeedsAttention):

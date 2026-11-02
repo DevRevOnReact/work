@@ -170,10 +170,11 @@ def main():
         assert approved_answers == [{"question": "Are you authorized to work in Georgia?", "answer": "Yes, confirmed for Georgia."}]
         assert ("fixture-0", "approve") in actions and ("fixture-2", "verify") in actions
 
-        # Autonomous blockers stay on the dashboard; a newly blocked manual
-        # application goes to the employer. All employer traffic is a fixture.
+        # Navigation belongs to the agent's browser. Blockers leave the dashboard
+        # open; explicit fallback links point to the actual discovered form.
         apps["fixture-3"] = create(3)
-        apps["fixture-3"].update(state="PREPARING", mode="autonomous", reads=-100)
+        direct_form = jobs[3]["canonical_url"] + "/application"
+        apps["fixture-3"].update(state="PREPARING", mode="autonomous", reads=-100, application_url=direct_form)
         page.goto(f"{base}/top", wait_until="networkidle")
         fourth = page.locator(".top-vacancy").nth(3)
         fourth.get_by_role("button", name="Auto Apply", exact=True).click()
@@ -182,7 +183,7 @@ def main():
         fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
         expect(fourth.get_by_text("Нужна ваша помощь", exact=True)).to_be_visible()
         assert page.url == f"{base}/top"
-        expect(fourth.get_by_role("link", name="Перейти к вакансии", exact=False)).to_have_attribute("href", jobs[3]["canonical_url"])
+        expect(fourth.get_by_role("link", name="Перейти к вакансии", exact=False)).to_have_attribute("href", direct_form)
         expect(fourth.get_by_text("Подтвердить ответ для этой и будущих заявок", exact=True)).to_have_count(0)
         apps["fixture-3"].update(state="PREPARING", mode="manual")
         fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
@@ -191,7 +192,10 @@ def main():
             content_type="text/html", body="<h1>Employer application fixture</h1>"))
         apps["fixture-3"]["state"] = "NEEDS_HUMAN_ACTION"
         fourth.get_by_role("button", name="Обновить состояние", exact=True).click()
-        page.wait_for_url(jobs[3]["canonical_url"])
+        expect(fourth.get_by_text("Нужна ваша помощь", exact=True)).to_be_visible()
+        assert page.url == f"{base}/top"
+        fourth.get_by_role("link", name="Перейти к вакансии", exact=False).click()
+        page.wait_for_url(direct_form)
         assert not errors, errors
         browser.close()
     print(json.dumps({"polling": True, "approval": True, "missing_answer": True, "pause_resume_cancel": True,

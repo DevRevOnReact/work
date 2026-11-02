@@ -52,6 +52,47 @@ def test_best_resume_selected_from_real_uploads_preserves_verified_preferences(d
     assert db.get(Candidate, 1).facts == original
 
 
+async def test_selected_resume_drives_actual_form_answers_and_pdf_upload(db, tmp_path, monkeypatch):
+    from io import BytesIO
+
+    from playwright.async_api import async_playwright
+    from pypdf import PdfReader
+
+    from jobpilot.answers import AnswerEngine
+    from jobpilot.ats import GenericFormAdapter
+
+    frontend = add_resume(db, tmp_path, "Jane Doe\nReact TypeScript CSS\n5 years experience",
+                          "frontend.txt", monkeypatch)
+    backend_text = "Jane Doe\nPython PostgreSQL REST\n5 years experience\nProjects\nBuilt Python payment APIs using PostgreSQL."
+    backend = add_resume(db, tmp_path, backend_text, "backend.txt", monkeypatch)
+    resume, context = select_resume(db, job(), Profile(active_resume_id=frontend.id,
+        full_name="Jane Doe", email="jane@example.invalid", location="Georgia"))
+    assert resume.id == backend.id
+    prepared = generate_resume(resume, context, job(), tmp_path / "prepared")
+    form = '''<form onsubmit="event.preventDefault();window.sent=true">
+      <label>Your full name<input required></label><label>Your email address<input type=email required></label>
+      <label>Resume<input type=file required accept="application/pdf"></label>
+      <label>Describe a relevant Python project<textarea required></textarea></label>
+      <button>Submit application</button></form>'''
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        browser_context = await browser.new_context()
+        page = await browser_context.new_page()
+        await page.set_content(form)
+        adapter = GenericFormAdapter()
+        answers = await adapter.prepare(page, prepared, AnswerEngine(context, {}), "Python PostgreSQL API engineer")
+        project = next(answer for answer in answers if "project" in answer["question"])
+        assert "Built Python payment APIs" in project["answer"] and "React" not in project["answer"]
+        assert await page.get_by_label("Your email address").input_value() == "jane@example.invalid"
+        upload = await page.get_by_label("Resume", exact=True).evaluate("el => ({name:el.files[0].name,type:el.files[0].type})")
+        assert upload == {"name": "resume.pdf", "type": "application/pdf"}
+        assert adapter.resume_path and adapter.resume_path.suffix == ".pdf"
+        pdf_text = "\n".join(page.extract_text() for page in PdfReader(BytesIO(adapter.resume_path.read_bytes())).pages)
+        assert "Built Python payment APIs using PostgreSQL." in pdf_text
+        assert "React" not in pdf_text and not await page.evaluate("window.sent || false")
+        await browser.close()
+
+
 def test_integrity_failure_skipped_and_no_valid_resume_blocks(db, tmp_path, monkeypatch):
     resume = add_resume(db, tmp_path, "Jane Doe\nPython", "cv.txt", monkeypatch)
     (tmp_path / "resumes" / resume.storage_key).write_text("Tampered content")

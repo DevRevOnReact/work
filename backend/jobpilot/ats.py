@@ -72,7 +72,11 @@ class GenericFormAdapter:
         r"^(?:next(?: step)?|continue|continue application|review(?: application)?|"
         r"далее|продолжить|следующий шаг|проверить заявку)$", re.IGNORECASE,
     )
-    opener_pattern = re.compile(r"^apply(?: for this (?:job|position)| now| for job)?$", re.IGNORECASE)
+    opener_pattern = re.compile(
+        r"^\s*(?:apply(?: (?:for|to) (?:this |the )?(?:job|position|role)| now| for job| online| here| externally|"
+        r" on (?:company|employer)(?:'s)? (?:website|site))?|start (?:your |an? )?application|"
+        r"application|откликнуться(?: на вакансию)?|подать заявку|заполнить анкету)[\s!›→↗»]*$", re.IGNORECASE,
+    )
     confirmation_pattern = re.compile(
         r"application (?:has been |was )?(?:successfully )?(?:submitted|received)|"
         r"thank you for applying|thanks for applying|successfully applied|"
@@ -82,8 +86,11 @@ class GenericFormAdapter:
     control_selector = "input, textarea, select, [role=combobox], [role=checkbox], [contenteditable=true][role=textbox]"
     max_steps = 12
 
-    def __init__(self, progress: Progress | None = None) -> None:
+    def __init__(self, progress: Progress | None = None, navigation_hosts: set[str] | None = None) -> None:
         self.progress = progress
+        self.navigation_hosts = navigation_hosts or set()
+        self._opened_urls: set[str] = set()
+        self.resume_path: Path | None = None
         self._before_confirmation: set[str] | None = None
         self._submit_started = False
 
@@ -134,6 +141,28 @@ class GenericFormAdapter:
         finally:
             await document.close()
 
+    async def resume_upload(self, page: Page, resume: Path, accept: str) -> Path:
+        """Use a PDF of the prepared document when the form only accepts PDF."""
+        accepted = {item.strip().lower() for item in accept.split(",") if item.strip()}
+        pdf = {".pdf", "application/pdf"}
+        docx = {".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "*/*", "application/*"}
+        if resume.suffix.lower() != ".docx" or not accepted.intersection(pdf) or accepted.intersection(docx):
+            return resume
+        from .resumes import parse_resume
+        text = parse_resume(resume.read_bytes(), resume.name).text
+        document = await page.context.new_page()
+        try:
+            await document.set_content(
+                '<html><head><meta charset="utf-8"></head><body style="font:11pt Arial;line-height:1.5">'
+                + "".join(f'<p style="margin:0 0 6pt">{escape(line)}</p>' for line in text.splitlines())
+                + '</body></html>'
+            )
+            path = resume.with_suffix(".pdf")
+            await document.pdf(path=str(path), format="A4", margin={"top": "18mm", "bottom": "18mm", "left": "18mm", "right": "18mm"})
+            return path
+        finally:
+            await document.close()
+
     @staticmethod
     def question(meta: dict[str, Any]) -> str:
         return re.sub(r"\s*(?:\*|\(required\)|обязательное поле)\s*$", "", meta["label"], flags=re.IGNORECASE).strip()[:2000]
@@ -151,6 +180,10 @@ class GenericFormAdapter:
                 if meta["type"] in {"hidden", "submit", "button", "reset"} and meta["role"] not in {"combobox", "checkbox"}:
                     continue
                 if meta["type"] != "file" and not await control.is_visible():
+                    continue
+                if meta["type"] == "file" and await control.evaluate(
+                    "el => !!el.closest('[hidden],[aria-hidden=true],fieldset[disabled]')"
+                ):
                     continue
                 fields.append({
                     "question": self.question(meta), "type": meta["type"] or meta["role"] or meta["tag"],
@@ -228,18 +261,23 @@ class GenericFormAdapter:
                     buttons.append(item)
         return buttons
 
-    async def _open(self, page: Page) -> None:
+    def can_navigate(self, destination: str, source: str) -> bool:
+        target, origin = urlsplit(destination), urlsplit(source)
+        try:
+            valid = (not target.username and not target.password and target.port in (None, 443))
+            same_origin = target.scheme == origin.scheme and target.netloc == origin.netloc
+            # Local HTTP fixtures may navigate within their own origin. Production
+            # requests also pass through the executor's HTTPS/public-IP guard.
+            return ((same_origin and target.scheme in {"http", "https"} and not target.username and not target.password)
+                    or (valid and target.scheme == "https" and target.hostname in self.navigation_hosts))
+        except ValueError:
+            return False
+
+    async def _open(self, page: Page) -> bool:
         await self._decline_optional_cookies(page)
-        if any(field["type"] == "file" for field in await self.inspect(page)):
-            return
-        openers = await self._buttons(page, self.opener_pattern)
-        if len(openers) == 1 and await openers[0].evaluate(
-            "el => el.type === 'button' && !el.form && !el.closest('form')"
-        ):
-            await self.report("opening_form", "Открытие формы отклика")
-            await openers[0].click()
-            await page.wait_for_timeout(300)
-            return
+        fields = await self.inspect(page)
+        if any(field["type"] == "file" for field in fields) or (fields and await self._buttons(page, self.next_pattern)):
+            return False
         links: dict[str, Locator] = {}
         for frame in page.frames:
             # A link may be exposed as a button/tab by the ATS accessibility tree.
@@ -249,16 +287,33 @@ class GenericFormAdapter:
                 if not await item.is_visible():
                     continue
                 href = await item.evaluate("el => el.href")
-                target = urlsplit(href)
-                source = urlsplit(frame.url)
-                # ATS description pages often have a regular /apply link. Stay
-                # on the already authorized origin; runtime also guards redirects.
-                if target.scheme in {"http", "https"} and target.netloc == source.netloc:
+                if self.can_navigate(href, frame.url) and href not in self._opened_urls:
                     links.setdefault(href, item)
         if len(links) == 1:
+            href = next(iter(links))
+            self._opened_urls.add(href)
             await self.report("opening_form", "Открытие страницы формы отклика")
-            await next(iter(links.values())).click()
+            # Keep target=_blank application links in the guarded agent session.
+            await page.goto(href, wait_until="domcontentloaded")
             await page.wait_for_timeout(300)
+            return True
+        if len(links) > 1:
+            raise NeedsAttention("На странице несколько разных ссылок отклика; нельзя однозначно выбрать вакансию")
+        openers = await self._buttons(page, self.opener_pattern)
+        for frame in page.frames:
+            tabs = frame.get_by_role("tab", name=self.opener_pattern)
+            for index in range(await tabs.count()):
+                if await tabs.nth(index).is_visible() and await tabs.nth(index).is_enabled():
+                    openers.append(tabs.nth(index))
+        safe_openers = [item for item in openers if await item.evaluate(
+            "el => !el.matches('a[href]') && !el.form && !el.closest('form')")]
+        names = {normalize(await item.inner_text()) for item in safe_openers}
+        if safe_openers and len(names) == 1:
+            await self.report("opening_form", "Открытие формы отклика")
+            await safe_openers[0].click()
+            await page.wait_for_timeout(300)
+            return True
+        return False
 
     async def _decline_optional_cookies(self, page: Page) -> None:
         """Reject optional tracking without accepting unapproved declarations."""
@@ -285,10 +340,15 @@ class GenericFormAdapter:
         from playwright.async_api import TimeoutError as BrowserTimeout
 
         deadline = time.monotonic() + 10
+        transitions = 0
         await self.report("waiting_for_form", "Ждём загрузки формы работодателя")
         while True:
             await self.guard(page)
-            await self._open(page)
+            if await self._open(page):
+                transitions += 1
+                if transitions > 5:
+                    raise NeedsAttention("Форма не найдена после нескольких переходов; проверьте страницу вакансии")
+                deadline = time.monotonic() + 10
             fields = await self.inspect(page)
             if any(field["type"] == "file" for field in fields):
                 return
@@ -330,7 +390,8 @@ class GenericFormAdapter:
                 return None, False
             if not re.search(r"resume|curriculum|\bcv\b|резюме", question, re.IGNORECASE):
                 raise NeedsAttention(f"Не удалось определить назначение загрузки файла: {question}")
-            await control.set_input_files(str(resume))
+            self.resume_path = await self.resume_upload(page, resume, meta["accept"])
+            await control.set_input_files(str(self.resume_path))
             await self.report("uploading_resume", "Загружено выбранное резюме")
             return None, True
         if kind == "radio":
@@ -339,14 +400,14 @@ class GenericFormAdapter:
                 if meta["required"]:
                     raise NeedsAttention(f"У группы вариантов нет доступного текста вопроса: {question}")
                 return None, False
-            answer = await engine.answer(group.strip(), context)
+            answer = await engine.choice_answer(group.strip(), context, [option["label"] for option in meta["options"]])
             if not any(normalize(option["label"]) == normalize(str(answer["answer"])) for option in meta["options"]):
                 raise NeedsAttention(f"Нет точного варианта ответа на вопрос: {group}")
             if normalize(str(answer["answer"])) == normalize(question):
                 await control.check()
                 return answer, False
             return None, False
-        answer = await engine.answer(question, context)
+        answer = await engine.choice_answer(question, context, [option["label"] for option in meta["options"]])
         value = str(answer["answer"])
         if meta["tag"] == "select":
             options = [o for o in meta["options"] if normalize(o["label"]) == normalize(value) and o["value"]]
@@ -398,6 +459,7 @@ class GenericFormAdapter:
     ) -> list[dict[str, Any]]:
         await self.guard(page)
         self._before_confirmation = await self._confirmations(page)
+        self._opened_urls.clear()
         await self.wait_for_form(page)
         evidence: list[dict[str, Any]] = []
         uploads = 0
@@ -532,9 +594,6 @@ class GreenhouseAdapter(GenericFormAdapter):
 class AshbyAdapter(GenericFormAdapter):
     """Ashby client-rendered fields and conditional screening questions."""
 
-    opener_pattern = re.compile(r"^(?:application|apply(?: for this job| now)?)$", re.IGNORECASE)
-
-
 class LeverAdapter(GenericFormAdapter):
     """Lever application modal and standard candidate/application fields."""
 
@@ -546,7 +605,7 @@ class WorkableAdapter(GenericFormAdapter):
 
 
 class SmartRecruitersAdapter(GenericFormAdapter):
-    opener_pattern = re.compile(r"^(?:i.m interested|apply(?: now| for this job)?)$", re.IGNORECASE)
+    opener_pattern = re.compile(rf"(?:{GenericFormAdapter.opener_pattern.pattern}|^i.m interested$)", re.IGNORECASE)
     submit_pattern = re.compile(r"^(?:submit application|submit|send application|apply|apply now)$", re.IGNORECASE)
 
 

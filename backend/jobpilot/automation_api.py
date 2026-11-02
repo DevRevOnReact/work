@@ -169,11 +169,13 @@ def file(application_id: str, filename: str, db: Session = Depends(session)) -> 
         uuid.UUID(str(app.attempt_id))
     except ValueError as exc:
         raise HTTPException(404) from exc
-    if filename not in {"resume.docx", "before.png", "after.png", "error.png"}:
+    if filename not in {"resume.docx", "resume.pdf", "before.png", "after.png", "error.png"}:
         raise HTTPException(404)
     root = settings().data_dir / "artifacts" / app.id / str(app.attempt_id)
     path = root / filename
     media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if filename.endswith("docx") else "image/png"
+    if filename.endswith(".pdf"):
+        media = "application/pdf"
     stored = db.get(ApplicationArtifact, (app.id, str(app.attempt_id), filename))
     if stored:
         return Response(stored.content, media_type=media, headers={"Content-Disposition": f'inline; filename="{filename}"',

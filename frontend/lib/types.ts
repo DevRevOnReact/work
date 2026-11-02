@@ -46,9 +46,9 @@ export type AutomationSettings = {
 };
 export type ApplicationDetail = {
   id: string; job_id: string; state: string; attention: string | null; mode: string;
-  progress: {step?: string; message?: string; question?: string; questions?: string[]; browser_status?: string; blocked_host?: string;
+  progress: {step?: string; message?: string; question?: string; questions?: string[]; browser_status?: string; blocked_host?: string; resume_filename?: string;
     events?: {at?: string; message: string; level?: string; step?: string}[]};
-  resume_id: string | null; generated_resume_url: string | null;
+  resume_id: string | null; generated_resume_url: string | null; application_url?: string | null;
   answers: {question: string; answer: string; evidence?: unknown}[];
   job: {company: string; title: string; canonical_url: string};
   submit_intent_at: string | null; submitted_at: string | null;

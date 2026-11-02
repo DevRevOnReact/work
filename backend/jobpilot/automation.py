@@ -255,8 +255,10 @@ def detail(db: Session, app: Application) -> dict[str, Any]:
     job = db.get(Job, app.job_id)
     result = serialize(app)
     root = f"/automation/applications/{app.id}/files"
+    resume_filename = "resume.pdf" if app.progress.get("uploaded_resume_filename") == "resume.pdf" else "resume.docx"
     result.update(job=serialize(job) if job else {}, approval_token=app.prepared_fingerprint,
-                  generated_resume_url=f"{root}/resume.docx" if app.generated_resume_key else None,
+                  application_url=app.progress.get("application_url") or (job.canonical_url if job else None),
+                  generated_resume_url=f"{root}/{resume_filename}" if app.generated_resume_key else None,
                   screenshot_url=f"{root}/{app.progress['screenshot']}" if app.progress.get("screenshot") else None)
     return result
 
