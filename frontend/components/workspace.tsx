@@ -1,12 +1,11 @@
 "use client";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Building2, FileText, Search, SlidersHorizontal, Trophy } from "lucide-react";
+import { Building2, FileText, Search, Trophy } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import type { PageName } from "@/lib/types";
 import { SearchesView } from "./searches-view";
 import { CompaniesView } from "./companies-view";
-import { SourcesView } from "./sources-view";
 import { ResumesView } from "./resumes-view";
 import { TopVacanciesView } from "./top-vacancies-view";
 
@@ -14,7 +13,6 @@ const pages = [
   {key: "search" as PageName, label: "Поиски", icon: Search, description: "Работа, которая подходит вашему опыту."},
   {key: "top" as PageName, label: "Топ за 3 дня", icon: Trophy, description: "Вакансии за последние 72 часа с соответствием резюме от 60/100."},
   {key: "companies" as PageName, label: "Компании", icon: Building2, description: "Новые работодатели и люди, с которыми можно познакомиться."},
-  {key: "sources" as PageName, label: "Источники вакансий", icon: SlidersHorizontal, description: "Настройте круг работодателей для ваших поисков."},
   {key: "resumes" as PageName, label: "Резюме и профиль", icon: FileText, description: "Ваш опыт и условия — основа каждого поиска."},
 ];
 function Workspace({initialPage}: {initialPage: PageName}) {
@@ -33,7 +31,6 @@ function Workspace({initialPage}: {initialPage: PageName}) {
       {state.page === "search" && <SearchesView state={state}/>}
       {state.page === "top" && <TopVacanciesView state={state}/>}
       {state.page === "companies" && <CompaniesView state={state}/>}
-      {state.page === "sources" && <SourcesView state={state}/>}
       {state.page === "resumes" && <ResumesView state={state}/>}
     </main></div></div>;
 }

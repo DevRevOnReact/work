@@ -38,7 +38,7 @@ export type TopVacancy = Pick<JobResult, "title" | "company" | "location" | "sal
   id: string; resume_filename: string; search_name: string; publication_label?: string;
 };
 export type TopVacancies = {window_hours: number; min_score: number; total: number; items: TopVacancy[]};
-export type PageName = "search" | "top" | "companies" | "sources" | "resumes";
+export type PageName = "search" | "top" | "companies" | "resumes";
 export type AutomationSettings = {
   enabled: boolean; mode: "manual" | "assisted" | "autonomous"; auto_apply: boolean;
   min_score: number; daily_limit: number; authorized_domains: string[]; excluded_companies: string[];

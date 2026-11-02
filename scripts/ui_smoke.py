@@ -43,7 +43,7 @@ def main() -> None:
         page.set_viewport_size({"width": 390, "height": 844})
         page.screenshot(path=str(output / "companies-mobile.png"), full_page=True)
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
-        for name in ["Источники вакансий", "Резюме и профиль"]:
+        for name in ["Резюме и профиль"]:
             page.get_by_role("button", name=name, exact=True).click()
             page.get_by_role("heading", name=name, exact=True).wait_for()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")

@@ -19,7 +19,6 @@ export function useWorkspace(initialPage: PageName = "search") {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const [sourceCompany, setSourceCompany] = useState("");
   const searches = useQuery<SavedSearch[]>({
     queryKey: ["searches"], queryFn: () => api("searches"), retry: false,
     refetchInterval: state => ["search", "top"].includes(page) ? state.state.data?.some(s => busy(s.status)) ? 2000 : 15000 : false,
@@ -51,6 +50,6 @@ export function useWorkspace(initialPage: PageName = "search") {
     setPage(next); setMessage(""); setError("");
   }
   return {page, navigate, selected, setSelected, editing, setEditing, message, error, pending,
-    searches, resumes, current, detail, action, sourceCompany, setSourceCompany};
+    searches, resumes, current, detail, action};
 }
 export type WorkspaceState = ReturnType<typeof useWorkspace>;

@@ -63,8 +63,7 @@ export function CompaniesView({state: s}: {state: WorkspaceState}) {
         <div className="button-row">{company.careers_url && <a className="button" href={company.careers_url} target="_blank" rel="noreferrer">Карьера ↗</a>}
           <a className="button" href={`https://www.linkedin.com/search/results/people/?${new URLSearchParams({keywords: `${company.name}${c.country === "Worldwide" ? "" : ` ${c.country}`}`})}`} target="_blank" rel="noreferrer">Люди в LinkedIn ↗</a>
           {company.sources.some(source => source.enabled) && <button className="button primary" disabled={s.pending || !s.resumes.data?.length}
-            onClick={() => void findJobs(company)}>Найти вакансии</button>}
-          <button className="text-button" onClick={() => {s.setSourceCompany(company.name); s.navigate("sources");}}>Подключить вакансии</button></div>
+            onClick={() => void findJobs(company)}>Найти вакансии</button>}</div>
         <CompanyContacts company={company} state={s}/>
       </article>)}</div>
       {!c.data.isPending && !c.companies.length && <p className="empty-state">Компаний по этим условиям нет. Измените запрос или запустите поиск новых компаний.</p>}
