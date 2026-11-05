@@ -463,6 +463,7 @@ class GenericFormAdapter:
         await self.wait_for_form(page)
         evidence: list[dict[str, Any]] = []
         uploads = 0
+        optional_missing: list[dict[str, Any]] = []
         # Track DOM node identity, not indexes: ATS components can insert new controls
         # after a select, or replace the entire current step.
         completed: set[tuple[str, str]] = set()
@@ -512,17 +513,20 @@ class GenericFormAdapter:
                             declaration = bool(LEGAL.search(question) or re.search(
                                 r"salary|compensation|зарплат|оклад|вознагражд", question, re.IGNORECASE
                             ))
+                            field = {"question": question,
+                                     "type": meta["type"] or meta["role"] or meta["tag"],
+                                     "required": meta["required"],
+                                     "options": [o["label"] for o in meta["options"]],
+                                     "reason": str(exc)}
                             if meta["required"] or meta["type"] == "file" or (declaration and populated):
-                                missing.append({"question": question,
-                                                "type": meta["type"] or meta["role"] or meta["tag"],
-                                                "required": meta["required"],
-                                                "options": [o["label"] for o in meta["options"]],
-                                                "reason": str(exc)})
+                                missing.append(field)
+                            else:
+                                optional_missing.append(field)
                 if not fresh:
                     break
                 await page.wait_for_timeout(150)
             if missing:
-                raise self._attention("; ".join(dict.fromkeys(m["reason"] for m in missing))[:2000], missing, evidence)
+                raise self._attention("; ".join(dict.fromkeys(m["reason"] for m in missing))[:2000], missing + optional_missing, evidence)
             await self._validate(page, evidence)
             next_buttons = await self._buttons(page, self.next_pattern)
             if not next_buttons:

@@ -66,10 +66,40 @@ def notify(db: Session, app: Application, job: Job, message: str) -> None:
     search_id = search_id or db.scalar(select(SavedSearch.id).limit(1))
     if not search_id:
         return
-    key = hashlib.sha256(f"application:{app.id}:{app.attempt_id}:{app.state}:{message}".encode()).hexdigest()
-    if db.get(SearchNotification, key) is None:
-        db.add(SearchNotification(id=key, search_id=search_id, channel="telegram",
-                                 message=f"JobPilot · {message}\n{job.title} — {job.company}\n{job.canonical_url}"[:4096]))
+    lines = [f"JobPilot · {message}", f"{job.title} — {job.company}",
+             f"Вакансия: {job.canonical_url}"]
+    if app.state in {"NEEDS_HUMAN_ACTION", "FAILED"}:
+        url = (app.progress or {}).get("application_url")
+        if url and url != job.canonical_url:
+            lines.append(f"Форма: {url}")
+        for answer in app.answers or []:
+            if answer.get("question") and answer.get("answer") is not None:
+                lines.append(f"Вопрос: {answer['question']}\nОтвет: {answer['answer']}")
+        seen = set()
+        for field in (app.progress or {}).get("fields", []):
+            question = field.get("question") or "Поле без подписи"
+            if question in seen:
+                continue
+            seen.add(question)
+            options = field.get("options") or []
+            detail = f"Вопрос: {question}\nОтвет: требуется уточнение"
+            if options:
+                detail += "\nВарианты: " + ", ".join(map(str, options))
+            if field.get("reason"):
+                detail += "\nПричина: " + str(field["reason"])
+            lines.append(detail)
+        if not app.answers and not seen:
+            lines.append("Поля формы пока не удалось получить. Откройте ссылку и продолжите вручную.")
+    # Telegram limits each message to 4096 UTF-16 code units. Split without
+    # dropping long answers; a conservative character limit handles emoji too.
+    body = "\n\n".join(lines)
+    chunks = [body[i:i + 1900] for i in range(0, len(body), 1900)] or [body]
+    for index, chunk in enumerate(chunks):
+        key = hashlib.sha256(f"application:{app.id}:{app.attempt_id}:{app.state}:{body}:{index}".encode()).hexdigest()
+        if db.get(SearchNotification, key) is None:
+            prefix = f"JobPilot · часть {index + 1}/{len(chunks)}\n" if len(chunks) > 1 else ""
+            db.add(SearchNotification(id=key, search_id=search_id, channel="telegram", message=prefix + chunk))
+
 
 
 def resolve_job(db: Session, url: str) -> Job:

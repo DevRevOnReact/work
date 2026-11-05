@@ -121,9 +121,14 @@ def process_candidates(session_factory: Any = SessionLocal) -> None:
                         if results and (best is None or results[0]["score"] > best["score"]):
                             best, best_search = results[0], search
                     if best is not None and best_search is not None:
+                        from .vacancy_review import prepare_reviews
+                        reviewed = prepare_reviews(db, best_search, [best])
                         row.result = {"score": best["score"], "search_id": best_search.id,
                                       "date_evidence": item.date_evidence}
-                        if qualifies(best):
+                        if not reviewed:
+                            row.status, row.result = "excluded", {**row.result, "reason": "Вакансия отклонена пользователем"}
+                        elif qualifies(reviewed[0]):
+                            best = reviewed[0]
                             save_top_vacancies(db, best_search, [best])
                             from .notifications import enqueue_top_telegram
                             enqueue_top_telegram(db, best_search.id, [best])

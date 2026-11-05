@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import SessionLocal, session
 from .http import authenticate
-from .models import NotificationSeen, SavedSearch, SearchNotification, now, uid
+from .models import NotificationSeen, SavedSearch, SearchNotification, VacancyReview, now, uid
 from .top_vacancies import publication, qualifies, top_rows
 
 router = APIRouter(dependencies=[Depends(authenticate)])
@@ -72,7 +72,7 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
     queued = 0
     current = now()
     for job in jobs:
-        if not qualifies(job, current):
+        if not qualifies(job, current) or job.get("review_status") == "approved":
             continue
         published = publication(job["published_at"])
         assert published is not None
@@ -99,10 +99,13 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
 
 def enqueue_search_report(db: Session, search: SavedSearch, *,
                           enqueue_without_credentials: bool = False) -> SearchNotification | None:
-    """One durable report per finished attempt, including empty and failed searches."""
+    """Report failures and partial source errors; successful runs stay quiet."""
     if not enqueue_without_credentials and "telegram" not in channels():
         return None
     if search.status not in {"complete", "failed"} or not search.started_at or not search.completed_at:
+        return None
+    progress = search.progress or {}
+    if search.status == "complete" and not search.errors and not progress.get("notification_error"):
         return None
     started = publication(search.started_at)
     completed = publication(search.completed_at)
@@ -111,30 +114,15 @@ def enqueue_search_report(db: Session, search: SavedSearch, *,
     existing = db.get(SearchNotification, identity)
     if existing is not None:
         return existing
-    progress = search.progress or {}
     lines = ["JobPilot · отчёт поиска · топ за 3 дня", search.name[:120],
              completed.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК")]
     if search.status == "failed":
         lines += ["Ошибка: не удалось завершить поиск.", "Предыдущие результаты сохранены; это не новый результат."]
     else:
-        top_count = progress.get("top_matched", 0)
-        lines += ["Завершён с ошибками отдельных источников." if search.errors else "Поиск завершён.",
-                  f"Получено вакансий из источников: {progress.get('fetched', 0)}.",
-                  f"Подошло в топ за 72 часа (от 60/100): {top_count}."]
-        if not top_count:
-            lines.append("Подходящих вакансий не найдено.")
-        if progress.get("top_review"):
-            lines.append(f"Ещё требуют проверки географии: {progress['top_review']} (в топ и бот не отправлены).")
-        queued = progress.get("telegram_queued")
-        if queued is None:
-            lines.append("Не удалось поставить уведомления о вакансиях в очередь.")
-        else:
-            lines.append(f"Новых уведомлений о вакансиях в очереди Telegram: {queued}.")
-            if top_count and not queued:
-                lines.append("Новых вакансий для отправки нет: найденные уже были в очереди.")
-        lines.append("В очереди — ещё не подтверждение доставки вакансий.")
-    if progress.get("total"):
-        lines.append(f"Источников обработано: {progress.get('done', 0)}/{progress['total']}.")
+        if search.errors:
+            lines.append("Поиск завершён с ошибками отдельных источников.")
+        if progress.get("notification_error"):
+            lines.append("Ошибка: не удалось поставить уведомления о вакансиях в очередь.")
     if search.errors:
         lines.append(f"Ошибок: {len(search.errors)}.")
         for error in search.errors[:3]:
@@ -171,36 +159,31 @@ def combine_search_reports(db: Session) -> None:
         else:
             groups[-1].append(report)
     for group in groups:
-        if len(group) < 2:
-            continue
-        lines = ["JobPilot · общий отчёт поиска · топ за 3 дня",
-                 f"Поисков: {len(group)}. Результаты по резюме:"]
+        buckets: list[list[tuple[SearchNotification, str]]] = []
+        suffix = settings().public_app_url.rstrip("/") + "/top" if settings().public_app_url else ""
         for report in group:
             parts = report.message.splitlines()
             name = parts[1] if len(parts) > 1 else "Поиск"
-            count = next((part.split(": ", 1)[1] for part in parts
-                          if part.startswith("Подошло в топ за 72 часа")), None)
-            review = next((part.split(": ", 1)[1].split(" ", 1)[0] for part in parts
-                           if part.startswith("Ещё требуют проверки географии")), None)
-            status = "ошибка поиска" if any("Ошибка: не удалось" in part for part in parts) else (
-                "ошибки источников" if any("Завершён с ошибками" in part for part in parts) else "готово")
-            summary = f"• {name}: {count or status}"
-            if count is not None and status != "готово":
-                summary += f" ({status})"
-            if review:
-                summary += f"; география на проверке: {review}"
-            lines.append(summary)
-        queued = sum(int(match.group(1)) for report in group
-                     if (match := re.search(r"Новых уведомлений о вакансиях в очереди Telegram: (\d+)", report.message)))
-        lines.append(f"Новых карточек вакансий в очереди: {queued}.")
-        lines.append("Очередь не подтверждает доставку.")
-        if settings().public_app_url:
-            lines.append(settings().public_app_url.rstrip("/") + "/top")
-        anchor = group[0]
-        anchor.message = "\n".join(lines)
-        anchor.next_attempt = max(publication(report.next_attempt) or now() for report in group)
-        for duplicate in group[1:]:
-            duplicate.status = "superseded"
+            status = ("ошибка поиска" if any("не удалось завершить поиск" in part for part in parts) else
+                      "ошибка уведомлений" if any("не удалось поставить уведомления" in part for part in parts) else
+                      "ошибки источников" if any("с ошибками" in part.casefold() for part in parts) else "готово")
+            entry = "\n".join([f"• {name}: {status}", *[part for part in parts if part.startswith("• ")]])
+            size = sum(len(item[1].encode("utf-16-le")) // 2 + 1 for item in buckets[-1]) if buckets else 0
+            if not buckets or size + len(entry.encode("utf-16-le")) // 2 + len(suffix) + 100 > 3800:
+                buckets.append([])
+            buckets[-1].append((report, entry))
+        for bucket in buckets:
+            if len(bucket) < 2:
+                continue
+            lines = ["JobPilot · общий отчёт поиска · топ за 3 дня", "Ошибки поиска:"]
+            lines.extend(entry for _, entry in bucket)
+            if suffix:
+                lines.append(suffix)
+            anchor = bucket[0][0]
+            anchor.message = "\n".join(lines)
+            anchor.next_attempt = max(publication(report.next_attempt) or now() for report, _ in bucket)
+            for duplicate, _ in bucket[1:]:
+                duplicate.status = "superseded"
 
 
 def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) -> None:
@@ -212,6 +195,18 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
             if not db.scalar(text("SELECT pg_try_advisory_xact_lock(804224)")):
                 return
         if only_ids is None:
+            from .vacancy_review import enqueue_pending_reviews
+            enqueue_pending_reviews(db)
+            # Older versions queued a report on every successful run, including LinkedIn research.
+            # Drain those quiet reports without hiding source or processing failures.
+            for report in db.scalars(select(SearchNotification).where(
+                    SearchNotification.channel == "telegram", SearchNotification.status == "pending",
+                    (SearchNotification.message.like("JobPilot · отчёт поиска · топ за 3 дня%")) |
+                    (SearchNotification.message.like("JobPilot · общий отчёт поиска · топ за 3 дня%")) |
+                    (SearchNotification.message.like("JobPilot · LinkedIn · отчёт за 3 дня%")))):
+                lowered = report.message.casefold()
+                if not any(word in lowered for word in ("ошиб", "недоступн", "не удалось")):
+                    report.status = "superseded"
             combine_search_reports(db)
         query = select(SearchNotification).where(
             SearchNotification.status == "pending",
@@ -240,9 +235,22 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
                         delay = spacing - (time.monotonic() - last_telegram)
                         if delay > 0:
                             time.sleep(delay)
+                        payload: dict[str, Any] = {"chat_id": config.telegram_chat_id, "text": item.message,
+                                                   "disable_web_page_preview": True}
+                        review = db.scalar(select(VacancyReview).where(VacancyReview.notification_id == item.id))
+                        if review:
+                            from .vacancy_review import context_hash, eligible_for_review
+                            if (review.status != "pending" or review.context_hash != context_hash(db, review.data)
+                                    or not eligible_for_review(review.data)):
+                                item.status = "superseded"
+                                continue
+                            payload["reply_markup"] = {"inline_keyboard": [[
+                                {"text": "✅ Подтвердить", "callback_data": f"vr:a:{review.id}"},
+                                {"text": "❌ Отклонить", "callback_data": f"vr:r:{review.id}"},
+                            ]]}
                         response = client.post(
                             f"https://api.telegram.org/bot{config.telegram_bot_token.get_secret_value()}/sendMessage",
-                            json={"chat_id": config.telegram_chat_id, "text": item.message, "disable_web_page_preview": True})
+                            json=payload)
                         response.raise_for_status()
                         last_telegram = time.monotonic()
                         if not response.json().get("ok"):

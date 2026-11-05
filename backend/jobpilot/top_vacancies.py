@@ -28,7 +28,9 @@ def qualifies(job: dict[str, Any], at: datetime | None = None) -> bool:
     current = at or now()
     published = publication(job.get("published_at"))
     return bool(published and current - timedelta(hours=WINDOW_HOURS) <= published <= current
-                and job.get("score", 0) >= MIN_SCORE and job.get("eligibility") == "eligible"
+                and job.get("score", 0) >= MIN_SCORE
+                and (job.get("eligibility") == "eligible" or
+                     (job.get("eligibility") == "unknown" and job.get("review_status") == "approved"))
                 and job.get("explanation", {}).get("recommendable", True)
                 and job.get("canonical_url", "").startswith("https://"))
 
@@ -63,7 +65,9 @@ def top_rows(db: Session, provider: str = "") -> list[TopVacancy]:
     rows = db.scalars(query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
     unique: dict[str, TopVacancy] = {}
     for row in rows:
-        if qualifies(row.data, current):
+        from .vacancy_review import is_approved
+        if (qualifies(row.data, current) and
+                (row.data.get("eligibility") == "eligible" or is_approved(db, row.data))):
             unique.setdefault(row.data["canonical_url"], row)
     return list(unique.values())
 
@@ -73,7 +77,7 @@ def top_vacancies(offset: int = Query(default=0, ge=0), limit: int = Query(defau
                   provider: Literal["", "linkedin"] = "",
                   db: Session = Depends(session)) -> dict[str, Any]:
     rows = top_rows(db, provider)
-    fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "publication_label", "eligibility")
+    fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "publication_label", "eligibility", "review_status")
     return {"window_hours": WINDOW_HOURS, "min_score": MIN_SCORE, "total": len(rows),
             "items": [{**{key: row.data.get(key) for key in fields}, "id": row.id, "score": row.score,
                        "resume_filename": row.resume_filename, "search_name": row.search_name}

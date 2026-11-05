@@ -20,6 +20,7 @@ class SearchRuntime:
     def __init__(self) -> None:
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="search")
         self.task: asyncio.Task | None = None
+        self.telegram_task: asyncio.Task | None = None
 
     def start(self) -> None:
         # A stopped process has no remaining local tasks. Preserve old results.
@@ -35,7 +36,15 @@ class SearchRuntime:
                 if search:
                     enqueue_search_report(db, search)
             db.commit()
+            try:
+                from .vacancy_review import backfill_saved_reviews
+                backfill_saved_reviews(db)
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                log.warning("Could not queue saved vacancies for review: %s", type(exc).__name__)
         self.task = asyncio.create_task(self.schedule())
+        self.telegram_task = asyncio.create_task(self.poll_telegram())
 
     def enqueue(self, search_id: str) -> bool:
         with SessionLocal() as db:
@@ -78,7 +87,20 @@ class SearchRuntime:
         for search_id in ids:
             self.enqueue(search_id)
 
+    async def poll_telegram(self) -> None:
+        from .telegram import deliver_outbox, poll_commands
+        while True:
+            try:
+                await asyncio.to_thread(poll_commands)
+                await asyncio.to_thread(deliver_outbox)
+            except Exception as exc:
+                # HTTP errors can contain the bot token in their URL.
+                log.warning("Telegram polling failed: %s", type(exc).__name__)
+            await asyncio.sleep(5)
+
     def stop(self) -> None:
         if self.task:
             self.task.cancel()
+        if self.telegram_task:
+            self.telegram_task.cancel()
         self.executor.shutdown(wait=False, cancel_futures=True)

@@ -85,8 +85,9 @@ gap, unconfirmed Staff/Principal scope and rejected geography block top delivery
 regardless of the professional score. Optional skills and explicit alternatives
 are handled separately. Task concepts recognize Russian and English wording;
 this is an explainable rule system, not an external semantic model.
-Unconfirmed geography remains visible in ordinary searches for review; only
-confirmed compatible geography is eligible for the automatic top and Telegram.
+Unconfirmed geography remains visible in ordinary searches for review. A fresh,
+otherwise qualifying vacancy with uncertain eligibility is also sent to Telegram
+for an explicit decision; it does not enter the top automatically.
 
 `search_locations` stores explicitly confirmed alternative locations. Each is
 checked independently; it never declares work authorization. Startup reparses
@@ -107,14 +108,25 @@ Telegram's `retry_after`, and expire when the vacancy leaves the 72-hour window.
 Email digests remain available. Telegram delivery is at-least-once across a crash
 after Telegram accepts a message but before the database commits the receipt.
 
-Every finished search also queues a Telegram report, including when it finds no
-matches or fails. The report shows the attempt time in Moscow, fetched vacancies,
-72-hour top matches, newly queued vacancy alerts and source errors. Queue counts
-are explicitly distinguished from confirmed delivery. One report is stored per
-search attempt; a later attempt gets its own report even if the results repeat.
-The cloud runner writes reports and alerts directly to the database without bot
-credentials, then wakes Render for delivery. The delivery step also runs after a
-search failure. Each enabled saved search has its own named report.
+Vacancies with uncertain geography, work authorization or workplace availability
+receive a separate card with **Подтвердить** and **Отклонить** buttons. A
+confirmation adds the vacancy to the top for its remaining 72-hour window; a
+rejection hides it from subsequent matching results while its details and the
+relevant profile facts remain unchanged. Decisions are deduplicated across
+searches and are requested again when those details or profile facts change.
+They do not change the underlying eligibility assessment, assert work
+authorization, or approve or send an application. The application workflow
+continues to check eligibility and ask for its own submission approval.
+Saved, still-fresh uncertain results are queued when the API starts. Buttons are
+handled only for the configured Telegram chat, while the API or Celery worker
+is running; a sleeping hosted service must be awake to process them.
+
+Successful searches no longer send count-only reports. Search failures and
+partial source errors still produce alerts, combined where possible. Older
+successful search and LinkedIn research reports already in the queue are also
+suppressed. Vacancy cards, application alerts and error reports remain available.
+The cloud runner queues alerts without bot credentials and wakes Render for
+delivery. `/stats` and `/today` provide application counts on request.
 
 After successful CI on `main`, **Verify deployment and Telegram** waits for the
 exact Render commit, calls the idempotent deployment-test endpoint, records the
@@ -152,10 +164,11 @@ of at least 60 enter the top and the existing Telegram outbox; messages include
 a short description and the complete LinkedIn URL. `/linkedin/jobs/status`
 reports processing counts behind the same authentication as other app APIs.
 The normal hosted employer-board schedule remains independent of this heartbeat.
-The heartbeat also queues one report per research run, including empty or partial
-checks, using `scripts/prepare_linkedin_report.py`. Its counts must come from the
-actual check and database processing state; pending candidates are not reported
-as delivered. The same run timestamp makes retries idempotent.
+The heartbeat can queue research reports using `scripts/prepare_linkedin_report.py`;
+normal count-only reports are suppressed on delivery while errors remain visible.
+Its counts must come from the actual check and database processing state; pending
+candidates are not reported as delivered. The same run timestamp makes retries
+idempotent.
 
 ## Development checks
 

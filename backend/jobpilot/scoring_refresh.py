@@ -70,6 +70,12 @@ def refresh_search_scoring(db: Session, candidate: Candidate) -> None:
             job = JobInput.model_validate(row.data)
             result = evaluate(job, search_profile(db, top_search.resume_id))
             data = {**row.data, "score": result["score"], "eligibility": result["eligibility"], "explanation": result}
+            data.pop("review_status", None)
+            from .vacancy_review import apply_decisions
+            reviewed = apply_decisions(db, [data])
+            if not reviewed:
+                raise ValueError("Vacancy rejected by user")
+            data = reviewed[0]
             filters = SearchFilters.model_validate(top_search.filters).model_copy(update={"posted_days": 0, "min_score": 60})
             if not qualifies(data) or not matches(job, filters, result):
                 raise ValueError("No longer qualified")

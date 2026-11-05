@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from jobpilot import notifications, searches
 from jobpilot.config import settings
-from jobpilot.models import SavedSearch, SearchNotification, Source, now
+from jobpilot.models import SavedSearch, SearchNotification, Source, VacancyReview, now
 from jobpilot.search_runner import run_saved_search
 from test_notifications import enable, search
 from test_saved_searches import setup_resumes, vacancy
@@ -19,30 +19,33 @@ def reports(db):
     return [row for row in db.scalars(select(SearchNotification)) if "отчёт поиска" in row.message]
 
 
-def test_report_is_once_per_attempt_including_zero_results(db, monkeypatch):
+def test_successful_searches_are_quiet_and_errors_reported_once_per_attempt(db, monkeypatch):
     enable(monkeypatch)
     value = search(db)
     value.status = "complete"
     value.started_at, value.completed_at = now() - timedelta(minutes=1), now()
     value.progress = {"fetched": 123, "done": 2, "total": 2, "top_matched": 0, "telegram_queued": 0}
+    assert notifications.enqueue_search_report(db, value) is None
+    value.errors = ["Источник недоступен"]
     first = notifications.enqueue_search_report(db, value)
     db.commit()
     assert notifications.enqueue_search_report(db, value).id == first.id
-    assert "Подходящих вакансий не найдено" in first.message and "123" in first.message
-    assert "2/2" in first.message and "МСК" in first.message
+    assert "Источник недоступен" in first.message and "МСК" in first.message
+    assert "123" not in first.message
     value.started_at = now()
     notifications.enqueue_search_report(db, value)
     db.commit()
     assert len(reports(db)) == 2
 
 
-def test_finished_resume_reports_are_combined_before_delivery(db, monkeypatch):
+def test_error_reports_are_combined_before_delivery(db, monkeypatch):
     enable(monkeypatch)
     first = search(db)
     second = search(db)
     second.name = "Другой профиль"
     for value, count in ((first, 2), (second, 0)):
         value.status = "complete"
+        value.errors = [f"Ошибка источника {count}"]
         value.started_at, value.completed_at = now() - timedelta(minutes=2), now()
         value.progress = {"top_matched": count, "telegram_queued": count}
         report = notifications.enqueue_search_report(db, value)
@@ -53,13 +56,34 @@ def test_finished_resume_reports_are_combined_before_delivery(db, monkeypatch):
     rows = list(db.scalars(select(SearchNotification)))
     pending = [row for row in rows if row.status == "pending"]
     assert len(pending) == 1
-    assert "Поисков: 2" in pending[0].message
+    assert "ошибки источников" in pending[0].message
     assert "Другой профиль" in pending[0].message
-    assert "Новых карточек вакансий в очереди: 2" in pending[0].message
+    assert "Ошибка источника 2" in pending[0].message
     assert len([row for row in rows if row.status == "superseded"]) == 1
 
 
-def test_cloud_run_queues_top_and_report_without_bot_secrets_and_reports_repeats(db, monkeypatch):
+def test_large_groups_of_error_reports_are_split_within_telegram_limit(db, monkeypatch):
+    enable(monkeypatch)
+    first = search(db)
+    for index in range(15):
+        value = first if index == 0 else SavedSearch(name=f"Поиск {index}", resume_id=first.resume_id, filters={})
+        if index:
+            db.add(value); db.flush()
+        value.status = "complete"
+        value.started_at, value.completed_at = now() - timedelta(minutes=2), now()
+        value.errors = [f"Источник-{index:02d}-{number}: " + "x" * 130 for number in range(3)]
+        notifications.enqueue_search_report(db, value)
+    db.commit()
+    notifications.combine_search_reports(db)
+    db.commit()
+    pending = list(db.scalars(select(SearchNotification).where(SearchNotification.status == "pending")))
+    assert len(pending) > 1
+    assert all(len(item.message.encode("utf-16-le")) // 2 <= 4096 for item in pending)
+    combined = "\n".join(item.message for item in pending)
+    assert all(f"Источник-{index:02d}-0" in combined for index in range(15))
+
+
+def test_cloud_run_queues_top_without_bot_secrets_and_stays_quiet_on_repeats(db, monkeypatch):
     monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr(""))
     monkeypatch.setattr(settings(), "telegram_chat_id", "")
     first, _ = setup_resumes(db)
@@ -78,11 +102,8 @@ def test_cloud_run_queues_top_and_report_without_bot_secrets_and_reports_repeats
         db.refresh(value)
         assert value.status == "complete" and value.result_count == 0
         assert value.progress["top_matched"] == 1 and value.progress["telegram_queued"] == expected_new
-    messages = reports(db)
-    assert len(messages) == 2
-    assert any("уже были в очереди" in row.message for row in messages)
-    assert all("Подошло в топ за 72 часа (от 60/100): 1" in row.message for row in messages)
-    assert len(list(db.scalars(select(SearchNotification)))) == 3
+    assert reports(db) == []
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
 
 
 def test_failed_search_reports_failure_instead_of_old_result_count(db, monkeypatch):
@@ -98,7 +119,7 @@ def test_failed_search_reports_failure_instead_of_old_result_count(db, monkeypat
     assert "99" not in message and "Нет включённых источников" in message
 
 
-def test_unknown_geography_is_counted_for_review_but_not_queued_as_a_top_job(db, monkeypatch):
+def test_unknown_geography_is_queued_for_review_but_not_as_a_top_job(db, monkeypatch):
     first, _ = setup_resumes(db)
     value = SavedSearch(name="Frontend", resume_id=first.id, filters={})
     db.add_all([value, Source(provider="ashby", company="Acme", board="acme")]); db.commit()
@@ -110,8 +131,10 @@ def test_unknown_geography_is_counted_for_review_but_not_queued_as_a_top_job(db,
                      enqueue_without_credentials=True)
     db.refresh(value)
     assert value.progress["top_matched"] == 0 and value.progress["top_review"] == 1
-    assert value.progress["telegram_queued"] == 0 and len(reports(db)) == 1
-    assert "Ещё требуют проверки географии: 1" in reports(db)[0].message
+    assert value.progress["telegram_queued"] == 0 and reports(db) == []
+    review = db.scalar(select(VacancyReview))
+    assert review.status == "pending"
+    assert "вакансия на проверке" in db.get(SearchNotification, review.notification_id).message
 
 
 def test_partial_source_failure_keeps_matching_count_and_warning(db, monkeypatch):
@@ -131,7 +154,25 @@ def test_partial_source_failure_keeps_matching_count_and_warning(db, monkeypatch
     db.refresh(value)
     message = reports(db)[0].message
     assert value.status == "complete" and "с ошибками отдельных источников" in message
-    assert "Подходящих вакансий не найдено" in message and "Broken: Источник недоступен" in message
+    assert "Broken: Источник недоступен" in message
+
+
+def test_notification_queue_failure_is_reported_even_when_search_succeeds(db, monkeypatch):
+    first, _ = setup_resumes(db)
+    value = SavedSearch(name="Frontend", resume_id=first.id, filters={})
+    db.add_all([value, Source(provider="ashby", company="Acme", board="acme")]); db.commit()
+    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 90, "eligibility": "eligible"})
+    class Adapter:
+        def __init__(self, client): pass
+        async def fetch(self, *args): return [vacancy()]
+    def fail_queue(*args, **kwargs):
+        raise RuntimeError("unavailable")
+    monkeypatch.setattr(notifications, "enqueue_top_telegram", fail_queue)
+    run_saved_search(value.id, sessionmaker(db.bind, expire_on_commit=False), {"ashby": Adapter}, False,
+                     enqueue_without_credentials=True)
+    db.refresh(value)
+    assert value.status == "complete" and value.progress["notification_error"] is True
+    assert "не удалось поставить уведомления" in reports(db)[0].message
 
 
 def test_report_skips_running_attempts_and_redacts_credentials(db, monkeypatch):

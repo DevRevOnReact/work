@@ -46,9 +46,9 @@ celery.conf.update(
     task_time_limit=600,
     beat_schedule={
         "three_hour_searches": {"task": "jobpilot.schedule_searches", "schedule": crontab(hour="*/3", minute=0)},
-
-
-
+        "telegram_commands": {"task": "jobpilot.telegram_commands", "schedule": 5.0},
+        "telegram_outbox": {"task": "jobpilot.deliver_outbox", "schedule": 10.0},
+        "search_notifications": {"task": "jobpilot.deliver_search_notifications", "schedule": 30.0},
     },
 )
 
@@ -298,38 +298,8 @@ def apply(application_id: str) -> None:
 
 @celery.task(name="jobpilot.deliver_outbox")
 def deliver_outbox() -> None:
-    s = settings()
-    if not s.telegram_bot_token.get_secret_value() or not s.telegram_chat_id:
-        return
-    with SessionLocal() as db:
-        # Hold row locks across delivery: avoids duplicate concurrent senders. At-least-once on crash.
-        for item in db.scalars(
-            select(Outbox)
-            .where(Outbox.status == "pending", Outbox.next_attempt <= now())
-            .with_for_update(skip_locked=True)
-            .limit(20)
-        ):
-            try:
-                r = httpx.post(
-                    f"https://api.telegram.org/bot{s.telegram_bot_token.get_secret_value()}/sendMessage",
-                    json={
-                        "chat_id": s.telegram_chat_id,
-                        "text": item.message[:4000],
-                        "disable_web_page_preview": True,
-                    },
-                    timeout=15,
-                )
-                r.raise_for_status()
-                if not r.json().get("ok"):
-                    raise ValueError("Telegram rejected message")
-                item.status = "sent"
-            except Exception as exc:
-                item.attempts += 1
-                item.error = type(exc).__name__
-                item.next_attempt = now() + timedelta(seconds=min(3600, 30 * 2**item.attempts))
-                if item.attempts >= 8:
-                    item.status = "dead"
-        db.commit()
+    from .telegram import deliver_outbox as deliver
+    deliver()
 
 
 @celery.task(name="jobpilot.telegram_commands")
@@ -341,6 +311,12 @@ def telegram_commands() -> None:
     except Exception as exc:
         # HTTP exceptions contain the bot token in the request URL.
         log.warning("telegram_poll_failed", error=type(exc).__name__)
+
+
+@celery.task(name="jobpilot.deliver_search_notifications")
+def deliver_search_notifications() -> None:
+    from .notifications import deliver_pending
+    deliver_pending()
 
 # Scheduled searches run separately from the legacy application automation.
 @celery.task(name="jobpilot.schedule_searches")

@@ -38,6 +38,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
         <small>{job.publication_label ? `LinkedIn: ${job.publication_label} (на момент проверки; время оценочное)` : <>Опубликовано {job.published_at ? new Date(job.published_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"}) : "—"} (Москва)</>} · {job.provider}</small>
         <small>Оценка по резюме: {job.resume_filename} · {job.search_name}</small>
         {job.eligibility === "rejected" && <p className="notice error">Есть ограничения допуска — проверьте условия вакансии.</p>}
+        {job.eligibility === "unknown" && <p className="notice">Добавлено после вашей проверки в Telegram. Доступность и право на работу остаются неподтверждёнными.</p>}
         {job.salary && <p>{job.salary}</p>}
         <a className="button" href={job.canonical_url} target="_blank" rel="noreferrer">Открыть вакансию ↗</a>
         <AutoApplyButton canonicalUrl={job.canonical_url}/>

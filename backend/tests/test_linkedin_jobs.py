@@ -12,7 +12,7 @@ from jobpilot.api import app
 from jobpilot.config import settings
 from jobpilot.db import session
 from jobpilot.linkedin_jobs import LinkedInJob, candidate_id, canonical_linkedin_url, process_candidates
-from jobpilot.models import LinkedInCandidate, SavedSearch, SearchNotification, TopVacancy, now
+from jobpilot.models import LinkedInCandidate, SavedSearch, SearchNotification, TopVacancy, VacancyReview, now
 from test_notifications import enable
 from test_saved_searches import setup_resumes
 
@@ -98,6 +98,20 @@ def test_low_score_does_not_inflate_to_threshold(db, monkeypatch):
     monkeypatch.setattr(searches, 'evaluate', lambda *args: {'score': 59, 'eligibility': 'unknown'})
     process_candidates(sessionmaker(db.bind, expire_on_commit=False)); db.refresh(row)
     assert row.status == 'below_threshold' and row.result['score'] == 59
+    assert list(db.scalars(select(TopVacancy))) == []
+
+
+def test_uncertain_linkedin_vacancy_is_sent_for_review(db, monkeypatch):
+    enable(monkeypatch)
+    first, _ = setup_resumes(db)
+    db.add(SavedSearch(name="Test", resume_id=first.id, filters={}))
+    data = record(); row = LinkedInCandidate(id=candidate_id(data["canonical_url"]), data=data)
+    db.add(row); db.commit()
+    monkeypatch.setattr(searches, "evaluate", lambda *args: {"score": 85, "eligibility": "unknown"})
+    process_candidates(sessionmaker(db.bind, expire_on_commit=False)); db.refresh(row)
+    review = db.scalar(select(VacancyReview))
+    assert row.status == "needs_review" and review.status == "pending"
+    assert "вакансия на проверке" in db.get(SearchNotification, review.notification_id).message
     assert list(db.scalars(select(TopVacancy))) == []
 
 

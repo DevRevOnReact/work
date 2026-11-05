@@ -726,3 +726,30 @@ async def test_daily_limit_defers_instead_of_requesting_human_intervention(db, w
     assert app.submit_intent_at is None
     await workspace.runtime.tick()
     assert app.id not in workspace.runtime.sessions
+
+
+def test_blocked_application_telegram_includes_answers_questions_and_all_parts(db, workspace, monkeypatch):
+    from pydantic import SecretStr
+    from jobpilot.models import SavedSearch, SearchNotification
+
+    monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr("token"))
+    monkeypatch.setattr(settings(), "telegram_chat_id", "123")
+    db.add(SavedSearch(name="Frontend", resume_id=workspace.resume.id, filters={}))
+    app = flow.request_application(db, workspace.job)
+    app.state = "NEEDS_HUMAN_ACTION"
+    long_answer = "Experience " * 600
+    app.answers = [{"question": "Tell us about yourself", "answer": long_answer}]
+    app.progress = {"application_url": "https://jobs.ashbyhq.com/test/apply", "fields": [
+        {"question": "Work authorization?", "options": ["Yes", "No"], "reason": "Нужно подтверждение"} ]}
+    flow.notify(db, app, workspace.job, "Требуется действие")
+    db.commit()
+    rows = list(db.scalars(select(SearchNotification).order_by(SearchNotification.created_at)))
+    assert len(rows) > 1
+    combined = "".join(row.message.split("\n", 1)[1] for row in rows)
+    assert long_answer in combined
+    assert "Work authorization?" in combined and "Yes, No" in combined
+    assert "требуется уточнение" in combined and "https://jobs.ashbyhq.com/test/apply" in combined
+    assert all(len(row.message.encode("utf-16-le")) // 2 <= 4096 for row in rows)
+    flow.notify(db, app, workspace.job, "Требуется действие")
+    db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == len(rows)

@@ -121,7 +121,14 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             top_results, _ = make_results(db, search, inputs, at=checked_at,
                                          since=checked_at - timedelta(days=3), filters_override=top_filters, limit=None)
             from .top_vacancies import qualifies, save_top_vacancies
-            review_count = sum(job.get("eligibility") == "unknown" for job in top_results)
+            from .vacancy_review import apply_decisions, prepare_reviews
+            top_results = prepare_reviews(db, search, top_results,
+                                          enqueue_without_credentials=enqueue_without_credentials)
+            filtered_results = apply_decisions(db, results)
+            count = max(0, count - (len(results) - len(filtered_results)))
+            results = filtered_results
+            review_count = sum(job.get("eligibility") == "unknown" and job.get("review_status") != "approved"
+                               for job in top_results)
             top_results = [job for job in top_results if qualifies(job, checked_at)]
             save_top_vacancies(db, search, top_results)
             search.results, search.result_count = results, count
@@ -138,6 +145,7 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             except Exception:
                 import logging
                 logging.getLogger(__name__).error("Unable to queue search notifications")
+                search.progress = {**search.progress, "notification_error": True}
             enqueue_search_report(db, search, enqueue_without_credentials=enqueue_without_credentials)
             db.commit()
     except Exception as exc:

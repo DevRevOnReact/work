@@ -218,6 +218,18 @@ class NotificationSeen(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
+class VacancyReview(Base):
+    __tablename__ = "vacancy_reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    url_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    context_hash: Mapped[str] = mapped_column(String(64))
+    search_id: Mapped[str] = mapped_column(String(36))
+    data: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    notification_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class TopVacancy(Base):
     __tablename__ = "top_vacancies"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
