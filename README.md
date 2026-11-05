@@ -77,6 +77,8 @@ Salary/employment filters match employer text; currencies and pay periods are no
 
 ## Top vacancies and Telegram
 
+Open the Telegram Mini App with `/top` or `/start` in the existing bot, then tap **Открыть топ вакансий**. This requires an HTTPS `PUBLIC_APP_URL` (automatically set from `RENDER_EXTERNAL_URL` on Render) and a private `TELEGRAM_CHAT_ID` belonging to the owner. Telegram signs the launch data, which the backend validates for each request; the main site's password is not required for this limited read-only view. The top groups matching company, job title and location across sources and retains the highest-scored result. Individual Telegram notifications still use URL-based deduplication.
+
 Matching v2 scores professional evidence with stack 40%, tasks 25%, role 15%,
 experience 10% and domain 10%. Missing requirements redistribute their weight;
 salary, education, language and geography are separate checks. Missing core or

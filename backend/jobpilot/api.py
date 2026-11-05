@@ -87,6 +87,8 @@ app.include_router(linkedin_jobs_router)
 app.include_router(company_router)
 app.include_router(notification_router)
 app.include_router(top_router)
+from .telegram_mini import router as telegram_mini_router
+app.include_router(telegram_mini_router)
 app.include_router(automation_router)
 
 

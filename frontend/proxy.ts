@@ -6,7 +6,7 @@ function equal(a: string, b: string) {
 }
 
 export function proxy(request: NextRequest) {
-  if (request.nextUrl.pathname === "/health") return NextResponse.next();
+  if (["/health", "/telegram", "/api/telegram-top"].includes(request.nextUrl.pathname)) return NextResponse.next();
   const password = process.env.LOGIN_PASSWORD || "";
   const hosted = process.env.HOSTED_MODE === "true";
   if (!password && !hosted) return NextResponse.next();

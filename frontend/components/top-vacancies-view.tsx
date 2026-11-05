@@ -18,7 +18,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
     queryKey: ["notifications/status"], queryFn: () => api("notifications/status"), retry: false, refetchInterval: 15000});
   return <section className="panel padded">
     <div className="panel-heading"><div><h2>Лучшие совпадения · от 60/100</h2>
-      <p>Сортировка по оценке. Учитываются дата публикации и фильтры ваших поисков; одинаковые ссылки объединены с лучшей оценкой.</p></div>
+      <p>Сортировка по оценке. Учитываются дата публикации и фильтры ваших поисков; одинаковые вакансии объединены с лучшей оценкой.</p></div>
       <button className="button primary" disabled={s.pending || refreshing || !s.searches.data?.some(search => search.enabled)}
         onClick={() => void s.action(() => api("discover", "POST"), "Обновление подборки запущено")}>{refreshing ? "Подборка обновляется…" : "Обновить подборку"}</button></div>
     <p className="hint">Новые подходящие вакансии отправляются в Telegram отдельными сообщениями с полной ссылкой. Одна вакансия не дублируется между поисками.</p>

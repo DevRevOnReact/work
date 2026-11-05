@@ -1,7 +1,9 @@
 """Persist high-scoring results independently from each search's daily snapshot."""
 import hashlib
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select
@@ -54,6 +56,23 @@ def save_top_vacancies(db: Session, search: SavedSearch, results: list[dict[str,
     db.execute(delete(TopVacancy).where(TopVacancy.published_at < current - timedelta(hours=WINDOW_HOURS)))
 
 
+def normalized_url(value: str) -> tuple[str, str, str]:
+    url = urlsplit(value)
+    query = urlencode(sorted((key, val) for key, val in parse_qsl(url.query, keep_blank_values=True)
+                             if not key.lower().startswith("utm_") and key.lower() not in {"ref", "source"}))
+    return url.netloc.casefold(), url.path.rstrip("/"), query
+
+
+def vacancy_identity(job: dict[str, Any]) -> tuple[str, ...]:
+    """Group identical role, employer and location across sources conservatively."""
+    def clean(value: Any) -> str:
+        return " ".join(re.findall(r"[^\W_]+", str(value or "").casefold()))
+    company, title, location = (clean(job.get(key)) for key in ("company", "title", "location"))
+    if company and title and location:
+        return ("role", company, title, location)
+    return ("url", *normalized_url(job.get("canonical_url", "")))
+
+
 def top_rows(db: Session, provider: str = "") -> list[TopVacancy]:
     current = now()
     query = select(TopVacancy).where(
@@ -63,12 +82,17 @@ def top_rows(db: Session, provider: str = "") -> list[TopVacancy]:
     if provider:
         query = query.where(TopVacancy.data["provider"].as_string() == provider)
     rows = db.scalars(query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
-    unique: dict[str, TopVacancy] = {}
+    unique: dict[tuple[str, ...], TopVacancy] = {}
+    seen_urls: set[tuple[str, str, str]] = set()
     for row in rows:
         from .vacancy_review import is_approved
         if (qualifies(row.data, current) and
                 (row.data.get("eligibility") == "eligible" or is_approved(db, row.data))):
-            unique.setdefault(row.data["canonical_url"], row)
+            url_key = normalized_url(row.data["canonical_url"])
+            identity = vacancy_identity(row.data)
+            if url_key not in seen_urls and identity not in unique:
+                unique[identity] = row
+            seen_urls.add(url_key)
     return list(unique.values())
 
 

@@ -21,7 +21,7 @@ def test_top_window_threshold_order_and_best_resume_dedup(db, monkeypatch):
     monkeypatch.setattr(top_vacancies, "now", lambda: at)
     value = search(db)
     valid = [dict(job("https://example.com/60"), score=60, published_at=(at-timedelta(hours=71)).isoformat()),
-             dict(job("https://example.com/90"), score=90, published_at=(at-timedelta(hours=24)).isoformat())]
+             dict(job("https://example.com/90"), title="Backend Engineer", score=90, published_at=(at-timedelta(hours=24)).isoformat())]
     invalid = [dict(job("https://example.com/low"), score=59, published_at=at.isoformat()),
                dict(job("https://example.com/old"), published_at=(at-timedelta(hours=72, seconds=1)).isoformat()),
                dict(job("https://example.com/unknown"), published_at=None),
@@ -188,3 +188,38 @@ def test_telegram_forbidden_identifies_bot_without_exposing_token(db, monkeypatc
     item = db.scalar(select(SearchNotification))
     assert "bots can't send messages to bots" in item.error
     assert "@ExampleJobPilotBot" in item.error and "secret-bot-token" not in item.error
+
+
+def test_top_collapses_cross_source_duplicates_and_keeps_best_score(db):
+    first, second = search(db), search(db)
+    original = job("https://example.com/first")
+    duplicate = dict(original, canonical_url="https://elsewhere.example/second", score=95,
+                     company="EXAMPLE", title="Frontend engineer")
+    top_vacancies.save_top_vacancies(db, first, [original])
+    top_vacancies.save_top_vacancies(db, second, [duplicate])
+    db.commit()
+    rows = top_vacancies.top_rows(db)
+    assert len(rows) == 1 and rows[0].score == 95
+
+
+def test_mini_app_requires_valid_telegram_signature_and_owner(db, monkeypatch):
+    import hashlib
+    import hmac
+    import json
+    import time
+    from urllib.parse import urlencode
+    enable(monkeypatch)
+    app.dependency_overrides[session] = lambda: db
+    try:
+        client = TestClient(app)
+        assert client.get("/telegram-mini/top-vacancies").status_code == 401
+        values = {"auth_date": str(int(time.time())), "user": json.dumps({"id": 123})}
+        check = "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
+        secret = hmac.new(b"WebAppData", b"secret-bot-token", hashlib.sha256).digest()
+        values["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        signed = urlencode(values)
+        assert client.get("/telegram-mini/top-vacancies", headers={"X-Telegram-Init-Data": signed}).status_code == 200
+        values["user"] = json.dumps({"id": 124})
+        assert client.get("/telegram-mini/top-vacancies", headers={"X-Telegram-Init-Data": urlencode(values)}).status_code == 401
+    finally:
+        app.dependency_overrides.clear()

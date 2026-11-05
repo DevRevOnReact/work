@@ -66,6 +66,8 @@ def poll_commands() -> None:
                         if control.enabled
                         else "Automation paused; in-flight submits may finish"
                     )
+                elif command in {"/start", "/top"}:
+                    output = "Откройте топ вакансий в мини-приложении кнопкой ниже."
                 elif command in {"/stats", "/today"}:
                     query = select(Application.state, func.count()).group_by(Application.state)
                     if command == "/today":
@@ -126,11 +128,14 @@ def deliver_outbox() -> None:
             return
         for item in db.scalars(select(Outbox).where(Outbox.status == "pending", Outbox.next_attempt <= now())
                                .with_for_update(skip_locked=True).limit(20)):
+            payload = {"chat_id": s.telegram_chat_id, "text": item.message[:4000],
+                       "disable_web_page_preview": True}
+            if item.message == "Откройте топ вакансий в мини-приложении кнопкой ниже." and s.public_app_url.startswith("https://"):
+                payload["reply_markup"] = {"inline_keyboard": [[{"text": "Открыть топ вакансий", "web_app": {"url": s.public_app_url.rstrip("/") + "/telegram"}}]]}
             try:
                 response = httpx.post(
                     f"https://api.telegram.org/bot{s.telegram_bot_token.get_secret_value()}/sendMessage",
-                    json={"chat_id": s.telegram_chat_id, "text": item.message[:4000],
-                          "disable_web_page_preview": True}, timeout=15)
+                    json=payload, timeout=15)
                 response.raise_for_status()
                 if not response.json().get("ok"):
                     raise ValueError("Telegram rejected message")
