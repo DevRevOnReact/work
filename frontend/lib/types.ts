@@ -35,7 +35,7 @@ export type Company = {
   signals: {kind: string; url: string; note: string; location: string; country?: string; checked_at: string; confidence: string; rank?: number}[];
 };
 export type TopVacancy = Pick<JobResult, "title" | "company" | "location" | "salary" | "provider" | "canonical_url" | "published_at" | "score" | "eligibility"> & {
-  id: string; resume_filename: string; search_name: string; publication_label?: string;
+  id: string; resume_filename: string; search_name: string; publication_label?: string; favorite: boolean;
 };
 export type TopVacancies = {window_hours: number; min_score: number; total: number; items: TopVacancy[]};
 export type PageName = "search" | "top" | "companies" | "resumes";
@@ -50,6 +50,7 @@ export type ApplicationDetail = {
     events?: {at?: string; message: string; level?: string; step?: string}[]};
   resume_id: string | null; generated_resume_url: string | null; application_url?: string | null;
   answers: {question: string; answer: string; evidence?: unknown}[];
+  handoff: {question: string; answer: string | null; options: string[]}[];
   job: {company: string; title: string; canonical_url: string};
   submit_intent_at: string | null; submitted_at: string | null;
   approval_token: string | null; screenshot_url: string | null;

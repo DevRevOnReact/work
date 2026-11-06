@@ -73,8 +73,20 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
       {app.resume_id && <a href={`/api/backend/resumes/${encodeURIComponent(app.resume_id)}/file`} target="_blank" rel="noreferrer">Исходное резюме ↗</a>}
       {app.state !== "NEEDS_HUMAN_ACTION" && employerUrl && <a href={employerUrl} target="_blank" rel="noreferrer">Форма отклика работодателя ↗</a>}
     </div>
-    {app.answers?.length > 0 && <details open={app.state === "AWAITING_APPROVAL"}><summary>Подготовленные ответы ({app.answers.length})</summary>
+    {app.answers?.length > 0 && !["NEEDS_HUMAN_ACTION", "FAILED"].includes(app.state) && <details open={app.state === "AWAITING_APPROVAL"}><summary>Подготовленные ответы ({app.answers.length})</summary>
       <dl className="application-answers">{app.answers.map((answer, i) => <div key={`${answer.question}-${i}`}><dt>{answer.question}</dt><dd>{answer.answer}</dd></div>)}</dl></details>}
+    {app.handoff?.length > 0 && ["NEEDS_HUMAN_ACTION", "FAILED"].includes(app.state) && <details open>
+      <summary>Вопросы и ответы для ручного отклика</summary>
+      <p className="hint">Контактные поля исключены. Ответы, требующие уточнения, заполните самостоятельно.</p>
+      <ol className="application-answers">{app.handoff.map((item, index) => <li key={`${item.question}-${index}`}>
+        <strong>{item.question}</strong><p>{item.answer || "Требуется ваш ответ"}</p>
+        {item.options.length > 0 && <small>Варианты: {item.options.join(", ")}</small>}
+        {item.answer && <button className="text-button" onClick={() => {
+          void navigator.clipboard.writeText(item.answer!).then(() => setMessage("Ответ скопирован"))
+            .catch(() => setError("Не удалось скопировать ответ. Выделите текст вручную."));
+        }}>Скопировать ответ</button>}
+      </li>)}</ol>
+    </details>}
     {screenshot && <details><summary>Последнее состояние браузера</summary><a href={screenshot} target="_blank" rel="noreferrer">
       <img className="application-screenshot" src={screenshot} alt="Последний снимок формы отклика" loading="lazy"/></a></details>}
     {app.state === "NEEDS_HUMAN_ACTION" && question && <details open><summary>Подтвердить ответ для этой и будущих заявок</summary>

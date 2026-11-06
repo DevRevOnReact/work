@@ -192,7 +192,7 @@ class ApplicationRuntime:
         from .domain import evaluate
         from .services import job_input
         from .tailoring import resume_contexts, select_resume
-        from .top_vacancies import top_rows
+        from .top_vacancies import WINDOW_HOURS, publication, top_rows
         with self.session_factory() as db:
             control = db.get(Control, 1)
             if not control or not control.enabled or control.mode == "manual":
@@ -209,7 +209,13 @@ class ApplicationRuntime:
             contexts = resume_contexts(db, profile)
             if not contexts:
                 return
-            records = [row.data for row in top_rows(db)]
+            records = []
+            for row in top_rows(db):
+                published = publication(row.data.get("published_at"))
+                if getattr(row, "favorite", False) and not (
+                        published and now() - timedelta(hours=WINDOW_HOURS) <= published <= now()):
+                    continue
+                records.append(row.data)
             for search in db.scalars(select(SavedSearch).where(SavedSearch.enabled.is_(True))):
                 records.extend(search.results)
             seen: set[str] = set()
@@ -228,7 +234,10 @@ class ApplicationRuntime:
                         continue
                     _, selected_profile = select_resume(db, job, profile, contexts=contexts)
                     match = evaluate(job_input(job), selected_profile)
-                    if (match["score"] < control.min_score or match["eligibility"] != "eligible"
+                    from .vacancy_review import approved_for_preparation
+                    confirmed = match["eligibility"] == "eligible" or (
+                        match["eligibility"] == "unknown" and approved_for_preparation(db, record))
+                    if (match["score"] < control.min_score or not confirmed
                             or not match.get("recommendable", True)):
                         continue
                     flow.request_application(db, job, control.mode)
@@ -249,6 +258,14 @@ class ApplicationRuntime:
                 raise NeedsAttention("Отклик остановлен пользователем")
             if not control or not control.enabled:
                 raise NeedsAttention("Автоматизация приостановлена в настройках")
+            from .vacancy_review import approved_for_preparation, is_rejected
+            job = db.get(Job, app.job_id)
+            if job:
+                data = flow.job_input(job).model_dump(mode="json")
+                if is_rejected(db, data):
+                    raise NeedsAttention("Вакансия отклонена; подготовка остановлена")
+                if app.resume_id and job.eligibility == "unknown" and not approved_for_preparation(db, data):
+                    raise NeedsAttention("Подтверждение вакансии больше не действует; подготовка остановлена")
 
     async def record(self, application_id: str, step: str, message: str) -> None:
         with self.session_factory() as db:
@@ -419,6 +436,16 @@ class ApplicationRuntime:
                 json.dumps(browser.form_snapshot, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
                 "application_url": browser.page.url}
             app.prepared_fingerprint = flow.fingerprint(app, version, digest, browser.page.url)
+            if job.eligibility != "eligible":
+                # Telegram confirmation authorizes preparation only. Hand the
+                # complete form back without inventing work authorization.
+                app.prepared_fingerprint = app.approved_fingerprint = None
+                flow.set_step(db, app, "NEEDS_HUMAN_ACTION",
+                              "Вопросы и ответы подготовлены. Проверьте условия допуска и завершите отклик вручную.",
+                              fields=[], questions=[], screenshot="before.png", browser_status="waiting")
+                flow.notify(db, app, job, "Подготовлены ответы для ручного отклика")
+                db.commit()
+                return
             categories = flow.approval_categories(answers)
             autonomous = (app.mode == "autonomous" and control.mode == "autonomous" and control.auto_apply
                           and not (categories & set(control.required_approval_categories))
@@ -572,6 +599,17 @@ class ApplicationRuntime:
             state = "SUBMISSION_UNCERTAIN" if app.submit_intent_at else "NEEDS_HUMAN_ACTION" if isinstance(exc, (NeedsAttention, ValueError)) else "FAILED"
             questions = getattr(exc, "questions", [])
             app.answers = getattr(exc, "answers", app.answers)
+            if browser and not app.submit_intent_at and callable(getattr(browser.adapter, "handoff", None)):
+                try:
+                    prepared, visible_fields = await browser.adapter.handoff(browser.page)
+                    app.answers = list({item.get("question", ""): item
+                                        for item in [*prepared, *(app.answers or [])]}.values())
+                    questions = list({item.get("question", ""): item
+                                      for item in [*visible_fields, *questions]}.values())
+                except Exception as handoff_error:
+                    # Keep the original failure and captured answers; external
+                    # error messages may contain filled personal information.
+                    audit(db, "handoff_unavailable", {"error": type(handoff_error).__name__}, app)
             if browser and browser.page:
                 app.progress = {**app.progress, "application_url": browser.page.url}
                 root = settings().data_dir / "artifacts" / app.id / str(app.attempt_id)

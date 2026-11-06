@@ -77,7 +77,7 @@ Salary/employment filters match employer text; currencies and pay periods are no
 
 ## Top vacancies and Telegram
 
-Open the Telegram Mini App with `/top` or `/start` in the existing bot, then tap **Открыть топ вакансий**. This requires an HTTPS `PUBLIC_APP_URL` (automatically set from `RENDER_EXTERNAL_URL` on Render) and a private `TELEGRAM_CHAT_ID` belonging to the owner. Telegram signs the launch data, which the backend validates for each request; the main site's password is not required for this limited read-only view. The top groups matching company, job title and location across sources and retains the highest-scored result. Individual Telegram notifications still use URL-based deduplication.
+Open the Telegram Mini App with `/top` or `/start` in the existing bot, then tap **Открыть топ вакансий**. This requires an HTTPS `PUBLIC_APP_URL` (automatically set from `RENDER_EXTERNAL_URL` on Render) and a private `TELEGRAM_CHAT_ID` belonging to the owner. Telegram signs the launch data, which the backend validates for every read and favorite update; the main site's password is not required for this limited view. The top groups matching company and job title across sources and locations and retains the highest-scored result. Notification deduplication uses both the normalized URL and normalized company/title, across searches and resumes. Capitalization, spacing and ordinary punctuation do not create a new role; meaningful technology punctuation such as C++ and C# remains distinct.
 
 Matching v2 scores professional evidence with stack 40%, tasks 25%, role 15%,
 experience 10% and domain 10%. Missing requirements redistribute their weight;
@@ -103,9 +103,18 @@ runs and are deduplicated by vacancy URL using the best resume score. The top
 uses each search's other filters, with its own 60-point threshold and 72-hour
 publication window. Unknown and future publication dates are excluded.
 
+Both the main top page and Telegram Mini App have **Все вакансии** and
+**Избранное** tabs. The heart saves an explicit, persistent favorite state.
+Favorites survive the 72-hour cleanup and remain visible in the top and favorites
+tab; removing the heart returns them to normal expiry. New source/resume
+representatives of the same vacancy inherit the favorite. Retaining a favorite
+does not extend Telegram notification freshness or automatically apply to an old
+vacancy. Rejected vacancies are removed even if previously favorited.
+
 Telegram receives **one message per qualifying vacancy**, including the complete
-job URL. A shared persistent key prevents re-enqueueing the same URL across
-resumes and searches. Messages wait in the durable queue, respect chat pacing and
+job URL. Persistent URL and company/title aliases prevent re-enqueueing the same
+vacancy across sources, resumes, searches and review/top messages. Email digests
+also deduplicate across searches by URL and company/title. Messages wait in the durable queue, respect chat pacing and
 Telegram's `retry_after`, and expire when the vacancy leaves the 72-hour window.
 Email digests remain available. Telegram delivery is at-least-once across a crash
 after Telegram accepts a message but before the database commits the receipt.
@@ -113,15 +122,32 @@ after Telegram accepts a message but before the database commits the receipt.
 Vacancies with uncertain geography, work authorization or workplace availability
 receive a separate card with **Подтвердить** and **Отклонить** buttons. A
 confirmation adds the vacancy to the top for its remaining 72-hour window; a
-rejection hides it from subsequent matching results while its details and the
-relevant profile facts remain unchanged. Decisions are deduplicated across
-searches and are requested again when those details or profile facts change.
+rejection permanently hides matching URLs or company/title pairs, including
+changed descriptions, locations and links. Decisions are deduplicated across
+searches. Changed vacancy/profile facts invalidate an approval and its old buttons,
+without sending the same vacancy again.
 They do not change the underlying eligibility assessment, assert work
-authorization, or approve or send an application. The application workflow
-continues to check eligibility and ask for its own submission approval.
+authorization, or approve or send an application. An approved uncertain vacancy
+may have its form prepared in the configured assisted/autonomous workflow, or
+through Auto Apply. Its questions and supported answers are handed back for manual
+completion while legal eligibility remains unknown; automatic submission still
+requires verified eligibility and the existing submission policy.
 Saved, still-fresh uncertain results are queued when the API starts. Buttons are
 handled only for the configured Telegram chat, while the API or Celery worker
 is running; a sleeping hosted service must be awake to process them.
+
+Form preparation follows unambiguous Apply links and buttons (including a new
+tab) through the authorized HTTPS domains until the actual form is available.
+It does not follow an opener when an application form is already present and
+does not click a final submit during preparation. If automation cannot finish,
+Telegram and the application panel show a numbered question/answer handoff,
+including unanswered questions and options. Identity, contact and upload fields
+are excluded, contact details are redacted from free-text answers, and prepared
+answers can be copied individually in the panel. A review confirmation is required
+for uncertain vacancies before the browser can prepare their forms. Duplicate,
+rejected, cancelled and already attempted applications are blocked by URL or
+company/title regardless of location. Migration `0013_vacancy_identity_favorites`
+preserves existing history and suppresses duplicate pending Telegram cards.
 
 Successful searches no longer send count-only reports. Search failures and
 partial source errors still produce alerts, combined where possible. Older

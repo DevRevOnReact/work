@@ -144,3 +144,7 @@ textarea:focus-visible { outline:3px solid #b0a0ed; outline-offset:3px; }
 .automation-choice p { margin: 8px 0 0 25px; }
 .automation-settings details { margin: 18px 0; }
 .automation-settings details label:not(.check-label) { margin-top: 14px; }
+.favorite-button { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; flex-shrink:0; }
+.favorite-button.is-favorite { color:#b42360; background:#fff0f5; border-color:#efbdd0; }
+.application-answers > li { padding:10px 0; border-top:1px solid var(--border); }
+.application-answers > li p { white-space:pre-wrap; }

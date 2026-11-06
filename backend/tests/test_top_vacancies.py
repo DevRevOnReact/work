@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -49,9 +50,9 @@ def test_top_window_threshold_order_and_best_resume_dedup(db, monkeypatch):
 def test_each_qualifying_job_is_queued_once_globally_without_truncating_urls(db, monkeypatch):
     enable(monkeypatch)
     first, second = search(db), search(db)
-    jobs = [job(f"https://example.com/{index}") for index in range(510)]
+    jobs = [dict(job(f"https://example.com/{index}"), title=f"Frontend Engineer {index}") for index in range(510)]
     long_url = "https://example.com/" + "x" * 1200
-    jobs.append(dict(job(long_url), score=60))
+    jobs.append(dict(job(long_url), score=60, title="Backend Engineer"))
     jobs.append(dict(job("https://example.com/rejected"), score=95, eligibility="rejected"))
     jobs.extend([dict(job("https://example.com/low"), score=59), dict(job("https://example.com/old"),
                  published_at=(now()-timedelta(days=4)).isoformat()), dict(job("https://example.com/undated"), published_at=None)])
@@ -219,7 +220,110 @@ def test_mini_app_requires_valid_telegram_signature_and_owner(db, monkeypatch):
         values["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
         signed = urlencode(values)
         assert client.get("/telegram-mini/top-vacancies", headers={"X-Telegram-Init-Data": signed}).status_code == 200
+        value = search(db)
+        top_vacancies.save_top_vacancies(db, value, [job()])
+        db.commit()
+        row = db.scalar(select(TopVacancy))
+        assert client.put(f"/telegram-mini/top-vacancies/{row.id}/favorite", json={"favorite": True},
+                          headers={"X-Telegram-Init-Data": signed}).status_code == 200
+        assert client.get("/telegram-mini/top-vacancies?favorites=true",
+                          headers={"X-Telegram-Init-Data": signed}).json()["total"] == 1
         values["user"] = json.dumps({"id": 124})
         assert client.get("/telegram-mini/top-vacancies", headers={"X-Telegram-Init-Data": urlencode(values)}).status_code == 401
+        assert client.put(f"/telegram-mini/top-vacancies/{row.id}/favorite", json={"favorite": False},
+                          headers={"X-Telegram-Init-Data": urlencode(values)}).status_code == 401
+        assert row.favorite
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_notification_identity_uses_role_company_and_url_across_sources(db, monkeypatch):
+    enable(monkeypatch)
+    first, second = search(db), search(db)
+    original = job()
+    duplicate = dict(original, company="  EXAMPLE ", title="Frontend  Engineer!", location="Anywhere",
+                     canonical_url="https://other.example/123")
+    assert notifications.enqueue_top_telegram(db, first.id, [original, duplicate]) == 1
+    db.commit()
+    assert notifications.enqueue_top_telegram(db, second.id, [duplicate]) == 0
+    assert notifications.enqueue_top_telegram(db, second.id, [dict(original, title="Different title",
+        canonical_url=original["canonical_url"] + "?utm_source=other#apply")]) == 0
+    assert notifications.enqueue_top_telegram(db, second.id, [dict(duplicate, company="Different Employer",
+        canonical_url="https://different-employer.example/role")]) == 1
+    assert notifications.enqueue_top_telegram(db, second.id, [dict(original, title="Backend Engineer",
+        canonical_url="https://other.example/backend")]) == 1
+
+
+def test_notification_remembers_new_aliases_of_previously_seen_vacancy(db, monkeypatch):
+    enable(monkeypatch)
+    value = search(db)
+    original = job()
+    assert notifications.enqueue_top_telegram(db, value.id, [original]) == 1
+    db.commit()
+    changed_title = dict(original, title="Frontend Developer")
+    assert notifications.enqueue_top_telegram(db, value.id, [changed_title]) == 0
+    db.commit()
+    assert notifications.enqueue_top_telegram(db, value.id, [dict(changed_title,
+        canonical_url="https://another.example/role")]) == 0
+
+
+def test_technology_punctuation_does_not_merge_different_roles():
+    from jobpilot.vacancy_identity import identity
+    assert identity(dict(job(), title="C++ Developer")) != identity(dict(job(), title="C# Developer"))
+
+
+def test_favorite_survives_expiry_cleanup_and_can_be_removed(db, monkeypatch):
+    value = search(db)
+    original = job()
+    top_vacancies.save_top_vacancies(db, value, [original])
+    db.commit()
+    row = db.scalar(select(TopVacancy))
+    app.dependency_overrides[session] = lambda: db
+    try:
+        client = TestClient(app)
+        assert client.put(f"/top-vacancies/{row.id}/favorite", json={"favorite": True}).status_code == 200
+        assert client.put(f"/top-vacancies/{row.id}/favorite", json={"favorite": True}).json()["favorite"]
+        monkeypatch.setattr(top_vacancies, "now", lambda: now() + timedelta(days=4))
+        top_vacancies.save_top_vacancies(db, value, [])
+        db.commit()
+        result = client.get("/top-vacancies?favorites=true").json()
+        assert result["total"] == 1 and result["items"][0]["favorite"]
+        assert client.get("/top-vacancies").json()["total"] == 1
+        assert client.put(f"/top-vacancies/{row.id}/favorite", json={"favorite": False}).status_code == 200
+        assert client.get("/top-vacancies?favorites=true").json()["total"] == 0
+        top_vacancies.save_top_vacancies(db, value, [])
+        db.commit()
+        assert db.get(TopVacancy, row.id) is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_favorite_follows_better_representative_and_filters_before_pagination(db):
+    first, second = search(db), search(db)
+    original = job()
+    top_vacancies.save_top_vacancies(db, first, [original])
+    db.flush()
+    row = db.scalar(select(TopVacancy))
+    top_vacancies.set_favorite(db, row.id, True)
+    duplicate = dict(original, score=99, canonical_url="https://elsewhere.example/same-role")
+    top_vacancies.save_top_vacancies(db, second, [duplicate, dict(job("https://example.com/other"), title="Backend Engineer")])
+    db.commit()
+    rows = top_vacancies.top_rows(db, favorites=True)
+    assert len(rows) == 1 and rows[0].score == 99 and rows[0].favorite
+    top_vacancies.set_favorite(db, rows[0].id, False)
+    assert top_vacancies.top_rows(db, favorites=True) == []
+
+
+@pytest.mark.parametrize("path", ["/top-vacancies", "/telegram-mini/top-vacancies"])
+def test_favorite_updates_require_authenticated_owner(db, monkeypatch, path):
+    value = search(db)
+    top_vacancies.save_top_vacancies(db, value, [job()])
+    db.commit()
+    row = db.scalar(select(TopVacancy))
+    monkeypatch.setattr(settings(), "auth_required", True)
+    app.dependency_overrides[session] = lambda: db
+    try:
+        assert TestClient(app).put(f"{path}/{row.id}/favorite", json={"favorite": True}).status_code == 401
+        assert not row.favorite
     finally:
         app.dependency_overrides.clear()

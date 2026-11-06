@@ -172,3 +172,58 @@ async def test_prepare_never_clicks_a_submit_opener(tmp_path):
             await LeverAdapter().prepare(page, resume, AnswerEngine(Profile(), {}), "")
         assert await page.evaluate("window.submissions||0") == 0
         await browser.close()
+
+
+async def test_apply_follows_multiple_links_including_accessible_icon_link(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page()
+        pages = {"https://board.example/role": '<a href="https://employer.example/job" aria-label="Apply"><span>↗</span></a>',
+                 "https://employer.example/job": '<a href="https://jobs.ashbyhq.com/test/application" target="_blank">Apply now</a>',
+                 "https://jobs.ashbyhq.com/test/application": FORM}
+        await page.route("**/*", lambda route: route.fulfill(body=pages[route.request.url], content_type="text/html"))
+        await page.goto("https://board.example/role")
+        adapter = GenericFormAdapter(navigation_hosts={"employer.example", "jobs.ashbyhq.com"})
+        await adapter.prepare(page, resume, AnswerEngine(Profile(full_name="Jane Doe",
+            email="jane@example.invalid", skills=["React"]), {}), "React role")
+        assert page.url == "https://jobs.ashbyhq.com/test/application"
+        assert await page.evaluate("window.submissions || 0") == 0
+        await browser.close()
+
+
+async def test_apply_button_popup_is_kept_in_guarded_session(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        context = await browser.new_context()
+        await context.route("https://employer.example/**", lambda route: route.fulfill(body=FORM, content_type="text/html"))
+        page = await context.new_page()
+        await page.set_content('<button type="button" onclick="window.open(\'https://employer.example/apply\')">Apply</button>')
+        adapter = GenericFormAdapter(navigation_hosts={"employer.example"})
+        await adapter.prepare(page, resume, AnswerEngine(Profile(full_name="Jane Doe",
+            email="jane@example.invalid", skills=["React"]), {}), "React role")
+        assert page.url == "https://employer.example/apply" and len(context.pages) == 1
+        assert await page.evaluate("window.submissions || 0") == 0
+        await browser.close()
+
+
+async def test_text_only_form_returns_answers_without_following_apply_or_submitting(tmp_path):
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4\n%%EOF")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(FORM.replace('<label>Resume<input type="file" name="resume" required></label>', '')
+                               + '<a href="https://elsewhere.example/apply">Apply</a>')
+        adapter = GenericFormAdapter(navigation_hosts={"elsewhere.example"})
+        with pytest.raises(NeedsAttention, match="загрузки резюме"):
+            await adapter.prepare(page, resume, AnswerEngine(Profile(full_name="Jane Doe",
+                email="jane@example.invalid", skills=["React"]), {}), "React role")
+        answers, fields = await adapter.handoff(page)
+        assert any(answer["question"] == "Tell us about yourself" for answer in answers)
+        assert any(field["question"] == "Email" for field in fields)
+        assert page.url == "about:blank" and await page.evaluate("window.submissions || 0") == 0
+        await browser.close()

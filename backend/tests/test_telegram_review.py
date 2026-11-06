@@ -98,12 +98,12 @@ def test_approval_is_authenticated_deduplicated_and_does_not_change_eligibility(
     assert "review_status" not in vacancy_review.apply_decisions(db, search.results)[0]
 
 
-def test_rejection_is_saved_and_changed_vacancy_needs_new_review(db, monkeypatch, review_setup):
+def test_rejection_is_permanent_across_changed_details_and_urls(db, monkeypatch, review_setup):
     search, other, job, review = review_setup
     deliver_review(db, monkeypatch, review)
     eligible = {**job, "eligibility": "eligible"}
     top_vacancies.save_top_vacancies(db, other, [eligible])
-    assert notifications.enqueue_top_telegram(db, other.id, [eligible]) == 1
+    assert notifications.enqueue_top_telegram(db, other.id, [eligible]) == 0
     db.flush()
     poll(monkeypatch, [callback(review, action="r")])
     assert review.status == "rejected"
@@ -111,22 +111,21 @@ def test_rejection_is_saved_and_changed_vacancy_needs_new_review(db, monkeypatch
     assert vacancy_review.prepare_reviews(db, search, [job]) == []
     assert vacancy_review.prepare_reviews(db, search, [eligible]) == []
     assert list(db.scalars(select(TopVacancy))) == []
-    assert len(list(db.scalars(select(SearchNotification).where(SearchNotification.status == "superseded")))) == 1
     old_notification = review.notification_id
     old_review_id = review.id
     changed = {**job, "description": job["description"] + " New eligibility requirements."}
-    assert vacancy_review.prepare_reviews(db, search, [changed]) == [changed]
+    assert vacancy_review.prepare_reviews(db, search, [changed]) == []
     db.commit()
-    assert review.status == "pending" and review.notification_id != old_notification
-    stale_click = callback(review, update_id=2)
-    stale_click["callback_query"]["data"] = f"vr:a:{old_review_id}"
-    poll(monkeypatch, [stale_click])
-    assert review.status == "pending"
-    changed_id = review.id
-    vacancy_review.prepare_reviews(db, search, [job])
+    assert review.status == "rejected" and review.notification_id == old_notification
+    changed = {**changed, "canonical_url": "https://other.example/new", "company": " ACME ",
+               "title": " ".join(job["title"].upper().split()), "location": "Worldwide"}
+    assert vacancy_review.prepare_reviews(db, search, [changed]) == []
+    assert vacancy_review.prepare_reviews(db, search, [{**changed, "eligibility": "eligible"}]) == []
+    assert notifications.enqueue_top_telegram(db, search.id, [{**changed, "eligibility": "eligible"}]) == 0
+    top_vacancies.save_top_vacancies(db, search, [{**changed, "eligibility": "eligible"}])
     db.commit()
-    assert review.id not in {old_review_id, changed_id}
-    assert review.notification_id != old_notification
+    assert review.id == old_review_id and not list(db.scalars(select(TopVacancy)))
+    assert len(list(db.scalars(select(VacancyReview)))) == len(list(db.scalars(select(SearchNotification)))) == 1
 
 
 def test_stale_profile_and_expired_or_changed_search_cannot_be_approved(db, monkeypatch, review_setup):
@@ -197,7 +196,7 @@ def test_unqueued_reviews_continue_past_the_first_batch(db, monkeypatch):
     db.add(search); db.flush()
     job = {**vacancy().model_dump(mode="json"), "score": 80, "eligibility": "unknown", "explanation": {}}
     for index in range(201):
-        data = {**job, "canonical_url": f"https://jobs.example/{index}"}
+        data = {**job, "canonical_url": f"https://jobs.example/{index}", "title": f"Engineer {index}"}
         db.add(VacancyReview(url_hash=vacancy_review.url_hash(data["canonical_url"]),
                              context_hash=vacancy_review.context_hash(db, data), search_id=search.id, data=data))
     db.commit()
@@ -228,3 +227,37 @@ def test_unsent_stale_reviews_are_retired_and_a_new_search_can_restore_them(db, 
     monkeypatch.setattr(settings(), "telegram_bot_token", SecretStr(""))
     vacancy_review.prepare_reviews(db, search, [job]); db.commit()
     assert review.status == "pending" and review.id != old_id
+
+
+def test_cross_source_reviews_and_changed_context_do_not_resend(db, review_setup):
+    search, other, job, review = review_setup
+    duplicate = {**job, "canonical_url": "https://other.example/role", "location": "Remote worldwide",
+                 "company": job["company"].upper(), "title": job["title"].upper()}
+    vacancy_review.prepare_reviews(db, other, [duplicate])
+    db.commit()
+    assert len(list(db.scalars(select(VacancyReview)))) == 1
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
+    candidate = db.get(Candidate, 1)
+    candidate.facts = {**candidate.facts, "location": "Paris"}
+    vacancy_review.prepare_reviews(db, search, [job])
+    db.commit()
+    assert review.status == "stale"
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
+
+
+def test_duplicate_unqueued_reviews_do_not_starve_later_distinct_jobs(db, monkeypatch):
+    enable(monkeypatch)
+    first, _ = setup_resumes(db)
+    search = SavedSearch(name="Saved", resume_id=first.id, filters={})
+    db.add(search); db.flush()
+    job = {**vacancy().model_dump(mode="json"), "score": 80, "eligibility": "unknown"}
+    for index in range(201):
+        data = {**job, "canonical_url": f"https://jobs.example/{index}"}
+        db.add(VacancyReview(url_hash=vacancy_review.url_hash(data["canonical_url"]),
+                             context_hash=vacancy_review.context_hash(db, data), search_id=search.id, data=data))
+    db.commit()
+    vacancy_review.enqueue_pending_reviews(db); db.commit()
+    vacancy_review.enqueue_pending_reviews(db); db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
+    assert not list(db.scalars(select(VacancyReview).where(VacancyReview.status == "pending",
+                                                          VacancyReview.notification_id.is_(None))))

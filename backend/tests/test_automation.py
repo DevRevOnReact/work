@@ -645,6 +645,20 @@ def test_selection_rechecks_stale_search_score_against_selected_resume(db, works
     assert app is not None and app.state == "QUEUED"
 
 
+def test_expired_favorite_does_not_enter_automatic_application_queue(db, workspace, monkeypatch):
+    from jobpilot import top_vacancies
+    workspace.control.mode = "autonomous"
+    workspace.control.enabled = workspace.control.auto_apply = True
+    workspace.control.min_score = 0
+    db.commit()
+    old = {**flow.job_input(workspace.job).model_dump(mode="json"), "score": 99, "eligibility": "eligible",
+           "published_at": (now() - timedelta(days=4)).isoformat()}
+    monkeypatch.setattr(top_vacancies, "top_rows", lambda db: [SimpleNamespace(data=old, favorite=True)])
+    workspace.runtime.select_eligible()
+    db.expire_all()
+    assert db.scalar(select(Application).where(Application.job_id == workspace.job.id)) is None
+
+
 async def test_transient_preparation_failure_retries_after_delay_without_submission(db, workspace, monkeypatch):
     adapter = mock_browser(monkeypatch, workspace.runtime)
     adapter.prepare.side_effect = [TimeoutError("Temporary connection loss"), []]
@@ -686,7 +700,7 @@ async def test_waiting_application_cannot_starve_queue(db, workspace, monkeypatc
     await workspace.runtime.tick()
     assert first.id in workspace.runtime.sessions
     second_job = Job(source_id=workspace.job.source_id, **vacancy(external_id="second",
-                     canonical_url="https://jobs.ashbyhq.com/test/second").model_dump())
+                     canonical_url="https://jobs.ashbyhq.com/test/second", company="Another Employer").model_dump())
     db.add(second_job)
     db.flush()
     second = flow.request_application(db, second_job)
@@ -753,3 +767,67 @@ def test_blocked_application_telegram_includes_answers_questions_and_all_parts(d
     flow.notify(db, app, workspace.job, "Требуется действие")
     db.commit()
     assert len(list(db.scalars(select(SearchNotification)))) == len(rows)
+
+
+@pytest.mark.parametrize("state", ["REJECTED", "REJECTED_BY_EMPLOYER", "CANCELLED", "QUEUED"])
+def test_application_identity_blocks_changed_url_and_location(db, workspace, state):
+    app = flow.request_application(db, workspace.job)
+    app.state = state
+    other = Job(source_id=workspace.job.source_id, **vacancy(external_id="duplicate",
+                company="  EXAMPLE ", title="Senior Frontend Engineer!", location="Different location",
+                canonical_url="https://jobs.ashbyhq.com/test/duplicate").model_dump())
+    db.add(other); db.commit()
+    with pytest.raises(ValueError, match="отклонена|уже отправлен"):
+        flow.request_application(db, other)
+
+
+async def test_confirmed_unknown_job_prepares_handoff_without_submitting(db, workspace, monkeypatch):
+    from jobpilot.models import VacancyReview
+    from jobpilot.vacancy_review import context_hash, url_hash
+    data = {**flow.job_input(workspace.job).model_dump(mode="json"), "eligibility": "unknown"}
+    db.add(VacancyReview(url_hash=url_hash(data["canonical_url"]), context_hash=context_hash(db, data),
+                         search_id="review", data=data, status="approved"))
+    monkeypatch.setattr(flow, "evaluate", lambda *args: {"score": 85, "eligibility": "unknown", "recommendable": True})
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+    adapter.prepare.return_value = [{"question": "Email", "answer": "jane@example.invalid"},
+                                    {"question": "Why this role?", "answer": "Relevant React experience."}]
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.tick()
+    db.expire_all(); db.refresh(app)
+    assert app.state == "NEEDS_HUMAN_ACTION", app.attention
+    assert app.submit_intent_at is None and adapter.submit.await_count == 0
+    assert flow.detail(db, app)["handoff"] == [{"question": "Why this role?",
+        "answer": "Relevant React experience.", "options": []}]
+
+
+@pytest.mark.parametrize("status", [None, "pending", "stale"])
+async def test_unconfirmed_unknown_job_never_opens_browser(db, workspace, monkeypatch, status):
+    from jobpilot.models import VacancyReview
+    from jobpilot.vacancy_review import context_hash, url_hash
+    data = {**flow.job_input(workspace.job).model_dump(mode="json"), "eligibility": "unknown"}
+    if status:
+        db.add(VacancyReview(url_hash=url_hash(data["canonical_url"]), context_hash=context_hash(db, data),
+                             search_id="review", data=data, status=status))
+    monkeypatch.setattr(flow, "evaluate", lambda *args: {"score": 85, "eligibility": "unknown", "recommendable": True})
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.tick()
+    db.expire_all(); db.refresh(app)
+    assert app.state == "NEEDS_HUMAN_ACTION" and app.id not in workspace.runtime.sessions
+    assert adapter.prepare.await_count == adapter.submit.await_count == 0
+
+
+def test_handoff_omits_contacts_redacts_free_text_and_keeps_unanswered_questions(db, workspace):
+    app = flow.request_application(db, workspace.job)
+    app.answers = [{"question": "Ваше имя", "answer": "Jane Doe"},
+                   {"question": "Email address", "answer": "jane@example.invalid"},
+                   {"question": "Phone", "answer": "+123456789"},
+                   {"question": "Tell us about yourself", "answer": "Jane Doe, React engineer. jane@example.invalid"}]
+    app.progress = {"fields": [{"question": "Email address", "type": "email"},
+                               {"question": "Work authorization?", "options": ["Yes", "No"]}]}
+    handoff = flow.detail(db, app)["handoff"]
+    assert len(handoff) == 2 and handoff[1]["answer"] is None
+    assert handoff[1]["options"] == ["Yes", "No"]
+    assert "jane@example.invalid" not in str(handoff) and "Jane Doe" not in str(handoff)

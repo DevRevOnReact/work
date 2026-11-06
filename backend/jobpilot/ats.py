@@ -93,6 +93,9 @@ class GenericFormAdapter:
         self.resume_path: Path | None = None
         self._before_confirmation: set[str] | None = None
         self._submit_started = False
+        self.prepared_answers: list[dict[str, Any]] = []
+        self.answer_engine: AnswerEngine | None = None
+        self.answer_context = ""
 
     async def report(self, step: str, detail: str) -> None:
         if self.progress:
@@ -278,10 +281,15 @@ class GenericFormAdapter:
         fields = await self.inspect(page)
         if any(field["type"] == "file" for field in fields) or (fields and await self._buttons(page, self.next_pattern)):
             return False
+        if fields:
+            for button in await self._buttons(page, self.submit_pattern):
+                if await button.evaluate("el => !!(el.form || el.closest('form'))"):
+                    return False
         links: dict[str, Locator] = {}
         for frame in page.frames:
             # A link may be exposed as a button/tab by the ATS accessibility tree.
-            found = frame.locator("a[href]").filter(has_text=self.opener_pattern)
+            found = frame.get_by_role("link", name=self.opener_pattern).or_(
+                frame.locator("a[href]").filter(has_text=self.opener_pattern))
             for i in range(await found.count()):
                 item = found.nth(i)
                 if not await item.is_visible():
@@ -310,8 +318,24 @@ class GenericFormAdapter:
         names = {normalize(await item.inner_text()) for item in safe_openers}
         if safe_openers and len(names) == 1:
             await self.report("opening_form", "Открытие формы отклика")
+            previous_pages = set(page.context.pages)
             await safe_openers[0].click()
             await page.wait_for_timeout(300)
+            opened = [item for item in page.context.pages if item not in previous_pages]
+            if opened:
+                try:
+                    if len(opened) != 1:
+                        raise NeedsAttention("Apply открыл несколько страниц; выберите форму вручную")
+                    popup = opened[0]
+                    await popup.wait_for_load_state("domcontentloaded", timeout=10000)
+                    target = popup.url
+                    if not self.can_navigate(target, page.url) or target in self._opened_urls:
+                        raise NeedsAttention("Разрешите домен формы из Apply в настройках откликов")
+                    self._opened_urls.add(target)
+                    await page.goto(target, wait_until="domcontentloaded")
+                finally:
+                    for popup in opened:
+                        await popup.close()
             return True
         return False
 
@@ -353,6 +377,10 @@ class GenericFormAdapter:
             if any(field["type"] == "file" for field in fields):
                 return
             if fields and await self._buttons(page, self.next_pattern):
+                return
+            # Text-only forms are useful for a manual handoff too. Never click
+            # their Apply/Submit button as if it opened another page.
+            if fields and await self._buttons(page, self.submit_pattern):
                 return
             if time.monotonic() >= deadline:
                 if await self._buttons(page, self.submit_pattern):
@@ -457,11 +485,13 @@ class GenericFormAdapter:
     async def prepare(
         self, page: Page, resume: Path, engine: AnswerEngine, context: str
     ) -> list[dict[str, Any]]:
+        self.prepared_answers = []
+        self.answer_engine, self.answer_context = engine, context
         await self.guard(page)
         self._before_confirmation = await self._confirmations(page)
         self._opened_urls.clear()
         await self.wait_for_form(page)
-        evidence: list[dict[str, Any]] = []
+        evidence = self.prepared_answers
         uploads = 0
         optional_missing: list[dict[str, Any]] = []
         # Track DOM node identity, not indexes: ATS components can insert new controls
@@ -545,6 +575,25 @@ class GenericFormAdapter:
             await next_buttons[0].click()
             await page.wait_for_timeout(300)
         raise self._attention("Превышен предел шагов формы; требуется ручная проверка", [], evidence)
+
+    async def handoff(self, page: Page) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read remaining questions after a failure without changing the page."""
+        from .handoff import questions_and_answers
+        engine = self.answer_engine
+        if engine is None:
+            return self.prepared_answers, []
+        fields = await self.inspect(page)
+        answers = list(self.prepared_answers)
+        answered = {normalize(item.get("question", "")) for item in answers}
+        for item in questions_and_answers([], fields, engine.profile.model_dump()):
+            if normalize(item["question"]) in answered:
+                continue
+            try:
+                answer = await engine.choice_answer(item["question"], self.answer_context, item["options"])
+                answers.append(answer)
+            except NeedsAttention:
+                pass  # Keep an explicit unanswered question; never invent a declaration.
+        return answers, fields
 
     async def validate_submission(self, page: Page) -> Locator:
         """Preflight before the executor commits its durable submit fence."""

@@ -222,6 +222,7 @@ class VacancyReview(Base):
     __tablename__ = "vacancy_reviews"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     url_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    identity_key: Mapped[str] = mapped_column(String(64), default="", index=True)
     context_hash: Mapped[str] = mapped_column(String(64))
     search_id: Mapped[str] = mapped_column(String(36))
     data: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -238,6 +239,7 @@ class TopVacancy(Base):
     resume_filename: Mapped[str] = mapped_column(String(255))
     search_name: Mapped[str] = mapped_column(String(120))
     score: Mapped[int] = mapped_column(Integer, index=True)
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

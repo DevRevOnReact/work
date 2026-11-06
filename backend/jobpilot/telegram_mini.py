@@ -2,16 +2,15 @@ import hashlib
 import hmac
 import json
 import time
+from typing import Annotated, Any
 from urllib.parse import parse_qsl
-
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import session
-from .top_vacancies import top_vacancies
+from .top_vacancies import FavoriteInput, set_favorite, top_vacancies
 
 router = APIRouter()
 
@@ -38,5 +37,10 @@ def authenticate_telegram(init_data: str = Header(default="", alias="X-Telegram-
 
 @router.get("/telegram-mini/top-vacancies", dependencies=[Depends(authenticate_telegram)])
 def mini_top(db: Annotated[Session, Depends(session)], offset: int = Query(default=0, ge=0),
-             limit: int = Query(default=20, ge=1, le=100)):
-    return top_vacancies(offset=offset, limit=limit, provider="", db=db)
+             limit: int = Query(default=20, ge=1, le=100), favorites: bool = False) -> dict[str, Any]:
+    return top_vacancies(offset=offset, limit=limit, provider="", favorites=favorites, db=db)
+
+
+@router.put("/telegram-mini/top-vacancies/{vacancy_id}/favorite", dependencies=[Depends(authenticate_telegram)])
+def mini_favorite(vacancy_id: str, body: FavoriteInput, db: Annotated[Session, Depends(session)]) -> dict[str, Any]:
+    return set_favorite(db, vacancy_id, body.favorite)

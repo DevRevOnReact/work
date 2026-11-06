@@ -6,7 +6,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -24,7 +24,7 @@ def main():
         "id": str(i), "title": f"Frontend Engineer {i}", "company": "Fixture Employer",
         "location": "Remote worldwide", "score": 90, "provider": "ashby",
         "canonical_url": f"https://jobs.ashbyhq.com/fixture/{i}", "published_at": stamp,
-        "salary": None, "eligibility": "eligible", "resume_filename": "fixture.txt", "search_name": "Frontend",
+        "salary": None, "eligibility": "eligible", "resume_filename": "fixture.txt", "search_name": "Frontend", "favorite": False,
     } for i in range(4)]
     apps = {}
     actions = []
@@ -42,6 +42,8 @@ def main():
                          "events": [{"at": stamp, "message": "Открыта форма работодателя"}]},
             "resume_id": None, "generated_resume_url": None, "screenshot_url": None,
             "answers": [{"question": "Your React experience?", "answer": "React projects in my uploaded resume.", "evidence": ["resume.0"]}],
+            "handoff": [{"question": "Your React experience?", "answer": "React projects in my uploaded resume.", "options": []},
+                        {"question": "Are you authorized to work in Georgia?", "answer": None, "options": ["Yes", "No"]}],
             "job": {key: jobs[index][key] for key in ("company", "title", "canonical_url")},
             "submit_intent_at": stamp if index == 2 else None, "submitted_at": None,
             "approval_token": "prepared-version-1", "reads": 0,
@@ -52,7 +54,13 @@ def main():
         method = route.request.method
         body = route.request.post_data_json if method in {"POST", "PUT"} and route.request.post_data else {}
         if path == "top-vacancies":
-            value = {"total": len(jobs), "items": jobs, "window_hours": 72, "min_score": 60}
+            favorites = parse_qs(urlsplit(route.request.url).query).get("favorites") == ["true"]
+            items = [job for job in jobs if not favorites or job["favorite"]]
+            value = {"total": len(items), "items": items, "window_hours": 72, "min_score": 60}
+        elif path.startswith("top-vacancies/") and path.endswith("/favorite"):
+            job = next(job for job in jobs if job["id"] == path.split("/")[1])
+            job["favorite"] = body["favorite"]
+            value = {"id": job["id"], "favorite": job["favorite"]}
         elif path == "automation/settings":
             if method == "PUT":
                 settings.update(body)
@@ -108,6 +116,18 @@ def main():
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.route("**/api/backend/**", route_api)
         page.goto(f"{base}/top", wait_until="networkidle")
+        page.locator(".top-vacancy").first.get_by_role("button", name="Добавить в избранное", exact=True).click()
+        expect(page.locator(".top-vacancy").first.get_by_role("button", name="Удалить из избранного", exact=True)).to_have_attribute("aria-pressed", "true")
+        page.get_by_role("tab", name="Избранное", exact=True).click()
+        expect(page.locator(".top-vacancy")).to_have_count(1)
+        page.reload(wait_until="networkidle")
+        page.get_by_role("tab", name="Избранное", exact=True).click()
+        expect(page.locator(".top-vacancy")).to_have_count(1)
+        page.locator(".top-vacancy").first.get_by_role("button", name="Удалить из избранного", exact=True).click()
+        expect(page.get_by_text("В избранном пока пусто.", exact=False)).to_be_visible()
+        page.get_by_role("tab", name="Избранное", exact=True).press("ArrowLeft")
+        expect(page.get_by_role("tab", name="Все вакансии", exact=True)).to_be_focused()
+        expect(page.locator(".top-vacancy")).to_have_count(4)
         first = page.locator(".top-vacancy").nth(0)
         first.get_by_role("button", name="Auto Apply", exact=True).click()
         expect(first.get_by_text("Ожидает разрешения на отправку", exact=True)).to_be_visible(timeout=10000)
@@ -118,6 +138,8 @@ def main():
 
         second = page.locator(".top-vacancy").nth(1)
         second.get_by_role("button", name="Auto Apply", exact=True).click()
+        expect(second.get_by_text("Вопросы и ответы для ручного отклика", exact=True)).to_be_visible()
+        expect(second.get_by_role("button", name="Скопировать ответ", exact=True)).to_be_visible()
         expect(second.get_by_label("Точный вопрос работодателя")).to_have_value("Are you authorized to work in Georgia?")
         second.get_by_label("Ваш подтверждённый ответ").fill("Yes, confirmed for Georgia.")
         second.get_by_role("button", name="Сохранить подтверждённый ответ", exact=True).click()
@@ -196,11 +218,43 @@ def main():
         assert page.url == f"{base}/top"
         fourth.get_by_role("link", name="Перейти к вакансии", exact=False).click()
         page.wait_for_url(direct_form)
+
+        mini = browser.new_page(viewport={"width": 390, "height": 844})
+        mini.on("pageerror", lambda error: errors.append(str(error)))
+        mini.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.fulfill(
+            content_type="application/javascript", body="window.Telegram={WebApp:{initData:'signed-fixture',ready(){},expand(){}}}"))
+
+        def mini_api(route):
+            assert route.request.headers.get("x-telegram-init-data") == "signed-fixture"
+            params = parse_qs(urlsplit(route.request.url).query)
+            if route.request.method == "PUT":
+                job = next(job for job in jobs if job["id"] == params["id"][0])
+                job["favorite"] = route.request.post_data_json["favorite"]
+                result = {"id": job["id"], "favorite": job["favorite"]}
+            else:
+                items = [job for job in jobs if params.get("favorites") != ["true"] or job["favorite"]]
+                result = {"total": len(items), "items": items, "window_hours": 72, "min_score": 60}
+            route.fulfill(content_type="application/json", body=json.dumps(result))
+
+        mini.route("**/api/telegram-top*", mini_api)
+        mini.goto(f"{base}/telegram", wait_until="networkidle")
+        mini.locator(".top-vacancy").first.get_by_role("button", name="Добавить в избранное", exact=True).click()
+        expect(mini.locator(".top-vacancy").first.get_by_role("button", name="Удалить из избранного", exact=True)).to_be_visible()
+        mini.get_by_role("tab", name="Избранное", exact=True).click()
+        expect(mini.locator(".top-vacancy")).to_have_count(1)
+        assert mini.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        mini.screenshot(path=str(output / "favorites-telegram-mobile.png"), full_page=True)
+        mini.reload(wait_until="networkidle")
+        mini.get_by_role("tab", name="Избранное", exact=True).click()
+        expect(mini.locator(".top-vacancy")).to_have_count(1)
+        mini.locator(".top-vacancy").first.get_by_role("button", name="Удалить из избранного", exact=True).click()
+        expect(mini.locator(".top-vacancy")).to_have_count(0)
         assert not errors, errors
         browser.close()
     print(json.dumps({"polling": True, "approval": True, "missing_answer": True, "pause_resume_cancel": True,
                       "uncertain_no_resubmit": True, "reload_existing": True, "autonomous_opt_in": True,
-                      "verified_authorization": True, "mobile": True, "browser_errors": errors}))
+                      "verified_authorization": True, "favorites": True, "telegram_favorites": True,
+                      "handoff": True, "mobile": True, "browser_errors": errors}))
 
 
 if __name__ == "__main__":

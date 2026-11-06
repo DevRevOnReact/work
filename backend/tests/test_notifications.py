@@ -41,10 +41,20 @@ def test_email_digests_are_deduplicated_and_telegram_uses_individual_top_jobs(db
     notifications.enqueue_digest(db, value, [job()])
     db.commit()
     assert len(list(db.scalars(select(SearchNotification)))) == 1
-    notifications.enqueue_digest(db, value, [job(), job("https://jobs.example/new")])
+    notifications.enqueue_digest(db, value, [job(), dict(job("https://jobs.example/new"), title="Backend Engineer")])
     db.commit()
     assert len(list(db.scalars(select(SearchNotification)))) == 2
     assert all(row.channel == "email" for row in db.scalars(select(SearchNotification)))
+
+
+def test_email_deduplicates_role_across_searches_and_changed_urls(db, monkeypatch):
+    enable(monkeypatch)
+    first, second = search(db), search(db)
+    notifications.enqueue_digest(db, first, [job()])
+    db.commit()
+    notifications.enqueue_digest(db, second, [dict(job("https://other.example/role"), title="FRONTEND  ENGINEER!", location="Anywhere")])
+    db.commit()
+    assert len(list(db.scalars(select(SearchNotification)))) == 1
 
 
 def test_delivery_retry_redacts_secrets_and_preserves_email_idempotency(db, monkeypatch):

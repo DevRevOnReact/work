@@ -9,7 +9,6 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, text, update
@@ -18,10 +17,22 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .domain import JobInput, Profile, evaluate
 from .http import serialize
-from .models import Application, ApplicationArtifact, Control, Job, SavedSearch, Source, TopVacancy, now, uid
+from .models import (
+    Application,
+    ApplicationArtifact,
+    Candidate,
+    Control,
+    Job,
+    SavedSearch,
+    Source,
+    TopVacancy,
+    now,
+    uid,
+)
 from .progress import advance
 from .security import verified_application_url
 from .services import audit, job_input
+from .vacancy_identity import canonical_url, identity, same_vacancy
 
 ACTIVE_STATES = {"QUEUED", "PREPARING", "RESUME_GENERATED", "ANSWERING_QUESTIONS", "FILLING_FORM"}
 WAIT_STATES = {"AWAITING_APPROVAL", "NEEDS_HUMAN_ACTION", "PAUSED"}
@@ -42,10 +53,7 @@ def store_artifact(db: Session, app: Application, path: Path) -> None:
 
 
 def canonical(url: str) -> str:
-    p = urlsplit(url.strip())
-    query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
-             if not k.casefold().startswith("utm_") and k.casefold() not in {"source", "ref", "referrer", "gh_src"}]
-    return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), urlencode(sorted(query)), ""))
+    return canonical_url(url)
 
 
 def set_step(db: Session, app: Application, state: str, message: str, **extra: Any) -> None:
@@ -62,34 +70,30 @@ def notify(db: Session, app: Application, job: Job, message: str) -> None:
     from .notifications import channels
     if "telegram" not in channels():
         return
+    from .vacancy_review import is_rejected
+    if is_rejected(db, job_input(job).model_dump(mode="json")):
+        return
     search_id = db.scalar(select(SavedSearch.id).where(SavedSearch.resume_id == app.resume_id).limit(1))
     search_id = search_id or db.scalar(select(SavedSearch.id).limit(1))
     if not search_id:
         return
-    lines = [f"JobPilot · {message}", f"{job.title} — {job.company}",
+    from .handoff import questions_and_answers, redact
+    candidate = db.get(Candidate, 1)
+    facts = candidate.facts if candidate else {}
+    lines = [f"JobPilot · {redact(message, facts)}", f"{job.title} — {job.company}",
              f"Вакансия: {job.canonical_url}"]
     if app.state in {"NEEDS_HUMAN_ACTION", "FAILED"}:
         url = (app.progress or {}).get("application_url")
         if url and url != job.canonical_url:
             lines.append(f"Форма: {url}")
-        for answer in app.answers or []:
-            if answer.get("question") and answer.get("answer") is not None:
-                lines.append(f"Вопрос: {answer['question']}\nОтвет: {answer['answer']}")
-        seen = set()
-        for field in (app.progress or {}).get("fields", []):
-            question = field.get("question") or "Поле без подписи"
-            if question in seen:
-                continue
-            seen.add(question)
-            options = field.get("options") or []
-            detail = f"Вопрос: {question}\nОтвет: требуется уточнение"
-            if options:
-                detail += "\nВарианты: " + ", ".join(map(str, options))
-            if field.get("reason"):
-                detail += "\nПричина: " + str(field["reason"])
+        handoff = questions_and_answers(app.answers or [], (app.progress or {}).get("fields", []), facts)
+        for index, item in enumerate(handoff, 1):
+            detail = f"{index}. Вопрос: {item['question']}\nОтвет: {item['answer'] or 'требуется уточнение'}"
+            if item["options"]:
+                detail += "\nВарианты: " + ", ".join(item["options"])
             lines.append(detail)
-        if not app.answers and not seen:
-            lines.append("Поля формы пока не удалось получить. Откройте ссылку и продолжите вручную.")
+        if not handoff:
+            lines.append("Дополнительные вопросы пока не получены. Откройте форму и продолжите вручную.")
     # Telegram limits each message to 4096 UTF-16 code units. Split without
     # dropping long answers; a conservative character limit handles emoji too.
     body = "\n\n".join(lines)
@@ -136,22 +140,30 @@ def resolve_job(db: Session, url: str) -> Job:
 
 
 def duplicate_reason(db: Session, job: Job, app: Application) -> str | None:
+    from .vacancy_review import is_rejected
+    data = job_input(job).model_dump(mode="json")
+    if app.state in {"REJECTED", "REJECTED_BY_EMPLOYER", "CANCELLED"} or is_rejected(db, data):
+        return "Вакансия уже отклонена или отклик отменён; повторная отправка заблокирована"
     if app.submit_intent_at or app.submitted_at:
         return "Отправка уже начата; повторная отправка заблокирована. Проверьте подтверждение."
     if job.duplicate_of:
         return "Вакансия отмечена как возможный дубликат; требуется проверка в истории"
     peers = db.execute(select(Application, Job).join(Job).where(Application.id != app.id,
-        (Application.submit_intent_at.is_not(None)) | (Application.submitted_at.is_not(None)))).all()
+        (Application.submit_intent_at.is_not(None)) | (Application.submitted_at.is_not(None)) |
+        Application.state.in_(ACTIVE_STATES | WAIT_STATES | FINAL_STATES | {"REJECTED", "CANCELLED"}))).all()
     for other, peer in peers:
-        if (canonical(peer.canonical_url) == canonical(job.canonical_url) or
-                (peer.company.strip().casefold() == job.company.strip().casefold()
-                 and peer.title.strip().casefold() == job.title.strip().casefold()
-                 and peer.location.strip().casefold() == job.location.strip().casefold())):
+        if same_vacancy(job_input(peer).model_dump(), data):
+            if other.state in {"REJECTED", "REJECTED_BY_EMPLOYER", "CANCELLED"}:
+                return f"Вакансия уже отклонена или отклик отменён ({other.id})"
             return f"Отклик на эту вакансию уже отправлен или требует проверки ({other.id})"
     return None
 
 
 def request_application(db: Session, job: Job, mode: str = "manual") -> Application:
+    if db.get_bind().dialect.name == "postgresql":
+        # Different URLs for one role must not race into separate browser jobs.
+        key = int(identity(job_input(job).model_dump())[:15], 16)
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
     app = db.scalar(select(Application).where(Application.job_id == job.id))
     if app is None:
         app = Application(job_id=job.id, state="MATCHED", mode=mode)
@@ -193,7 +205,10 @@ def policy_check(db: Session, app: Application, job: Job, profile: Profile, *, s
         raise NeedsAttention(reason)
     result = evaluate(job_input(job), profile)
     job.score, job.eligibility, job.explanation = result["score"], result["eligibility"], result
-    if result["eligibility"] != "eligible":
+    from .vacancy_review import approved_for_preparation
+    confirmed_review = approved_for_preparation(db, job_input(job).model_dump(mode="json"))
+    if result["eligibility"] != "eligible" and not (
+            result["eligibility"] == "unknown" and confirmed_review and not submitting):
         raise NeedsAttention("Подтвердите место проживания и право на работу в профиле; допуск к вакансии не установлен")
     if not result.get("recommendable", True):
         raise NeedsAttention("Не подтверждены обязательные требования: " + "; ".join(result.get("blockers", [])))
@@ -282,8 +297,12 @@ def recover(db: Session, *, stale_only: bool = False) -> None:
 
 
 def detail(db: Session, app: Application) -> dict[str, Any]:
+    from .handoff import questions_and_answers
     job = db.get(Job, app.job_id)
     result = serialize(app)
+    candidate = db.get(Candidate, 1)
+    result["handoff"] = questions_and_answers(app.answers or [], (app.progress or {}).get("fields", []),
+                                               candidate.facts if candidate else {})
     root = f"/automation/applications/{app.id}/files"
     resume_filename = "resume.pdf" if app.progress.get("uploaded_resume_filename") == "resume.pdf" else "resume.docx"
     result.update(job=serialize(job) if job else {}, approval_token=app.prepared_fingerprint,

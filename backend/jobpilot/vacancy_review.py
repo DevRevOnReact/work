@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .models import Candidate, SavedSearch, SearchNotification, TopVacancy, VacancyReview, now, uid
 from .services import audit
 from .top_vacancies import MIN_SCORE, WINDOW_HOURS, publication, save_top_vacancies
+from .vacancy_identity import canonical_url, claim_delivery, identity, same_vacancy
 
 
 def url_hash(url: str) -> str:
@@ -34,15 +35,35 @@ def eligible_for_review(job: dict[str, Any]) -> bool:
                 and published and current - timedelta(hours=WINDOW_HOURS) <= published <= current)
 
 
+def matching_reviews(db: Session, job: dict[str, Any]) -> list[VacancyReview]:
+    rows = db.scalars(select(VacancyReview).where(
+        (VacancyReview.identity_key == identity(job)) |
+        (VacancyReview.url_hash == url_hash(job.get("canonical_url", ""))) |
+        (VacancyReview.identity_key == "")))
+    return [row for row in rows if same_vacancy(row.data, job)]
+
+
+def is_rejected(db: Session, job: dict[str, Any]) -> bool:
+    return any(row.status == "rejected" for row in matching_reviews(db, job))
+
+
+def approved_for_preparation(db: Session, job: dict[str, Any]) -> bool:
+    """A review permits form preparation, never asserts legal eligibility."""
+    return any(row.status == "approved" and row.context_hash == context_hash(db, row.data)
+               and canonical_url(row.data.get("canonical_url", "")) == canonical_url(job.get("canonical_url", ""))
+               and all(row.data.get(key) == job.get(key) for key in ("location", "description"))
+               for row in matching_reviews(db, job))
+
+
 def _queue(db: Session, review: VacancyReview, *, enqueue_without_credentials: bool = False) -> bool:
     from .notifications import channels
     if review.status != "pending" or (not enqueue_without_credentials and "telegram" not in channels()):
         return False
     if not eligible_for_review(review.data) or db.get(SavedSearch, review.search_id) is None:
         return False
-    identity = hashlib.sha256(f"telegram-review-v1:{review.id}:{review.context_hash}".encode()).hexdigest()
-    if db.get(SearchNotification, identity) is not None:
-        review.notification_id = identity
+    notification_key = hashlib.sha256(f"telegram-review-v1:{review.id}:{review.context_hash}".encode()).hexdigest()
+    if db.get(SearchNotification, notification_key) is not None:
+        review.notification_id = notification_key
         return False
     job = review.data
     reasons = [str(reason) for reason in job.get("explanation", {}).get("reasons", [])
@@ -61,8 +82,12 @@ def _queue(db: Session, review: VacancyReview, *, enqueue_without_credentials: b
         text = f"JobPilot · вакансия на проверке · {job['score']}/100\n\n{job['canonical_url']}"
     if len(text.encode("utf-16-le")) // 2 > 3800:
         return False
-    review.notification_id = identity
-    db.add(SearchNotification(id=identity, search_id=review.search_id, channel="telegram", message=text,
+    review.identity_key = identity(job)
+    if not claim_delivery(db, job):
+        review.status = "stale"
+        return False
+    review.notification_id = notification_key
+    db.add(SearchNotification(id=notification_key, search_id=review.search_id, channel="telegram", message=text,
                               expires_at=published + timedelta(hours=WINDOW_HOURS)))
     return True
 
@@ -77,20 +102,26 @@ def prepare_reviews(db: Session, search: SavedSearch, jobs: list[dict[str, Any]]
         if not eligible_for_review(job):
             continue
         digest, context = url_hash(job["canonical_url"]), context_hash(db, job)
+        peers = matching_reviews(db, job)
+        if any(peer.status == "rejected" for peer in peers):
+            continue
+        if peers and all(peer.url_hash != digest for peer in peers):
+            continue  # Same employer and role on another board is not a new review.
         db.execute(insert(VacancyReview).values(id=uid(), url_hash=digest, context_hash=context,
-                   search_id=search.id, data=job, status="pending", updated_at=now())
+                   identity_key=identity(job), search_id=search.id, data=job, status="pending", updated_at=now())
                    .on_conflict_do_nothing(index_elements=[VacancyReview.url_hash]))
         review = db.scalar(select(VacancyReview).where(VacancyReview.url_hash == digest).with_for_update())
         assert review is not None
         previous_search = db.get(SavedSearch, review.search_id)
-        if review.context_hash != context or review.status == "stale":
+        if review.context_hash != context or (review.status == "stale" and not review.notification_id):
             old = db.get(SearchNotification, review.notification_id) if review.notification_id else None
             if old and old.status == "pending":
                 old.status = "superseded"
             # A new identifier prevents an old Telegram button becoming valid again
             # if the vacancy or profile later returns to an earlier version.
             review.id = uid()
-            review.context_hash, review.status, review.notification_id = context, "pending", None
+            # Invalidate old buttons without sending the same vacancy again.
+            review.context_hash, review.status = context, "stale" if review.notification_id else "pending"
             review.data, review.search_id, review.updated_at = job, search.id, now()
         elif job["score"] > review.data.get("score", 0) or not previous_search or not previous_search.enabled:
             review.data, review.search_id, review.updated_at = job, search.id, now()
@@ -105,7 +136,10 @@ def apply_decisions(db: Session, jobs: list[dict[str, Any]]) -> list[dict[str, A
     urls = {url_hash(job.get("canonical_url", "")) for job in jobs}
     reviews = {review.url_hash: review for review in db.scalars(select(VacancyReview).where(VacancyReview.url_hash.in_(urls)))}
     result = []
+    rejected = list(db.scalars(select(VacancyReview).where(VacancyReview.status == "rejected")))
     for job in jobs:
+        if any(same_vacancy(review.data, job) for review in rejected):
+            continue
         if "review_status" in job:
             job = {key: value for key, value in job.items() if key != "review_status"}
         review = reviews.get(url_hash(job.get("canonical_url", "")))
@@ -157,6 +191,8 @@ def decide(db: Session, review_id: str, message_id: str, decision: str) -> tuple
         return "Эта кнопка больше не действует.", None
     if review.status != "pending":
         return "Решение по вакансии уже сохранено.", notification
+    if is_rejected(db, review.data):
+        return "Эта вакансия уже отклонена.", notification
     if (review.context_hash != context_hash(db, review.data) or not eligible_for_review(review.data)
             or db.get(SavedSearch, review.search_id) is None):
         return "Данные изменились или вакансия устарела. Дождитесь обновления поиска.", None
@@ -188,12 +224,18 @@ def decide(db: Session, review_id: str, message_id: str, decision: str) -> tuple
         save_top_vacancies(db, search, [{**job, "review_status": "approved"}])
     else:
         for row in db.scalars(select(TopVacancy)):
-            if row.data.get("canonical_url") == job["canonical_url"]:
+            if same_vacancy(row.data, job):
+                key = hashlib.sha256(f"telegram-top-v1:{row.data['canonical_url']}".encode()).hexdigest()
+                queued_top = db.get(SearchNotification, key)
+                if queued_top and queued_top.status == "pending":
+                    queued_top.status = "superseded"
                 db.delete(row)
-        identity = hashlib.sha256(f"telegram-top-v1:{job['canonical_url']}".encode()).hexdigest()
-        queued_top = db.get(SearchNotification, identity)
-        if queued_top and queued_top.status == "pending":
-            queued_top.status = "superseded"
+        for peer in matching_reviews(db, job):
+            if peer.id != review.id:
+                peer.status = "rejected"
+            queued = db.get(SearchNotification, peer.notification_id) if peer.notification_id else None
+            if queued and queued.status == "pending":
+                queued.status = "superseded"
     for search in db.scalars(select(SavedSearch)):
         previous = search.results or []
         updated = apply_decisions(db, previous)

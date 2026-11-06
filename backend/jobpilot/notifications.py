@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import SessionLocal, session
 from .http import authenticate
-from .models import NotificationSeen, SavedSearch, SearchNotification, VacancyReview, now, uid
+from .models import SavedSearch, SearchNotification, VacancyReview, now, uid
 from .top_vacancies import publication, qualifies, top_rows
+from .vacancy_identity import claim_delivery
 
 router = APIRouter(dependencies=[Depends(authenticate)])
 
@@ -32,17 +33,17 @@ def channels() -> list[str]:
 
 
 def enqueue_digest(db: Session, search: SavedSearch, results: list[dict[str, Any]]) -> None:
+    from .vacancy_review import apply_decisions
+    results = apply_decisions(db, results)
     for channel in channels():
         if channel == "telegram":
             continue  # Telegram receives every top vacancy individually, through the durable outbox below.
         fresh = []
-        keys = {hashlib.sha256(f"{channel}:{search.id}:{job['canonical_url']}".encode()).hexdigest(): job
-                for job in results if job["score"] >= settings().notification_min_score
-                and job.get("eligibility") != "rejected"}
-        seen = set(db.scalars(select(NotificationSeen.id).where(NotificationSeen.id.in_(keys))))
-        for key, job in keys.items():
-            if key not in seen:
-                db.add(NotificationSeen(id=key))
+        for job in results:
+            if job["score"] < settings().notification_min_score or job.get("eligibility") == "rejected":
+                continue
+            key = hashlib.sha256(f"{channel}:{search.id}:{job['canonical_url']}".encode()).hexdigest()
+            if claim_delivery(db, job, channel, legacy_keys=(key,)):
                 fresh.append(job)
         if not fresh:
             continue
@@ -66,19 +67,18 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
                          enqueue_without_credentials: bool = False) -> int:
     if not enqueue_without_credentials and "telegram" not in channels():
         return 0
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    from .vacancy_review import matching_reviews
     queued = 0
     current = now()
     for job in jobs:
         if not qualifies(job, current) or job.get("review_status") == "approved":
             continue
+        if matching_reviews(db, job):
+            continue
         published = publication(job["published_at"])
         assert published is not None
         key = hashlib.sha256(f"telegram-top-v1:{job['canonical_url']}".encode()).hexdigest()
-        claimed = db.scalar(insert(NotificationSeen).values(id=key).on_conflict_do_nothing().returning(NotificationSeen.id))
-        if not claimed:
+        if not claim_delivery(db, job):
             continue
         message = (f"JobPilot · топ за 3 дня · {job['score']}/100\n\n"
                    f"{job['company'][:120]} · {job['title'][:240]}\n{job.get('location', '')[:200]}\n"
