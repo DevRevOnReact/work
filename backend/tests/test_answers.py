@@ -321,6 +321,7 @@ def mock_llm(monkeypatch, content, provider="openai"):
             llm_api_key=SecretStr("test-key"),
             llm_model="test-model",
             llm_provider=provider,
+            llm_question_limit=6,
         ),
     )
 
@@ -438,3 +439,35 @@ async def test_specific_technology_years_never_reuse_total_years_or_llm(monkeypa
 async def test_specific_technical_question_missing_skill_requires_input():
     with pytest.raises(NeedsAttention, match="PostgreSQL"):
         await AnswerEngine(Profile(skills=["Python"]), {}).answer("Describe your PostgreSQL experience", "")
+
+
+async def test_repeated_question_and_handoff_use_one_model_call(monkeypatch):
+    captured = mock_llm(monkeypatch, '{"fact_ids": ["resume.0"]}')
+    engine = AnswerEngine(Profile(resume_text="Optimized SQL queries."), {})
+    first = await engine.answer("How did you optimize SQL?", "SQL")
+    second = await engine.choice_answer("How did you optimize SQL?", "SQL", ["Yes", "No"])
+    assert first == second and len(captured) == engine.llm_calls == 1
+
+
+async def test_distinct_technology_questions_cannot_share_cached_or_approved_answers():
+    engine = AnswerEngine(Profile(), {"Do you know C++?": "Yes", "Do you know C#?": "No"})
+    assert (await engine.answer("Do you know C++?", ""))["answer"] == "Yes"
+    assert (await engine.answer("Do you know C#?", ""))["answer"] == "No"
+    with pytest.raises(NeedsAttention):
+        await engine.answer("Do you know C?", "")
+
+
+async def test_unknown_repeated_question_is_cached_and_model_budget_is_bounded(monkeypatch):
+    captured = mock_llm(monkeypatch, '{"fact_ids": []}')
+    engine = AnswerEngine(Profile(resume_text="Built SQL queries."), {})
+    for _ in range(3):
+        with pytest.raises(NeedsAttention):
+            await engine.answer("Which unrecorded award did you win?", "")
+    assert len(captured) == 1
+    for index in range(8):
+        with pytest.raises(NeedsAttention):
+            await engine.answer(f"Which unrecorded achievement number {index}?", "")
+    assert len(captured) == engine.llm_calls == 6
+    # Approved answers still work after exhausting the model budget.
+    engine.approved[normalize("Favorite editor?")] = "Vim"
+    assert (await engine.answer("Favorite editor?", ""))["answer"] == "Vim"

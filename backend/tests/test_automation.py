@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from test_domain import vacancy
 
 from jobpilot import automation as flow
-from jobpilot.answers import NeedsAttention
+from jobpilot.answers import AnswerEngine, NeedsAttention
 from jobpilot.application_runtime import ApplicationRuntime, BrowserSession
 from jobpilot.automation_api import AutomationSettings, put_settings
 from jobpilot.config import settings
@@ -367,7 +367,8 @@ async def test_actual_browser_route_guard_blocks_untrusted_writes_and_navigation
     runtime = workspace.runtime
     app = flow.request_application(db, workspace.job)
     db.commit()
-    page = SimpleNamespace(set_default_timeout=MagicMock(), goto=AsyncMock(), wait_for_timeout=AsyncMock())
+    page = SimpleNamespace(set_default_timeout=MagicMock(), goto=AsyncMock(return_value=None),
+                           on=MagicMock(), wait_for_timeout=AsyncMock())
     context = SimpleNamespace(route=AsyncMock(), new_page=AsyncMock(return_value=page), close=AsyncMock(),
                               route_web_socket=AsyncMock())
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
@@ -381,14 +382,24 @@ async def test_actual_browser_route_guard_blocks_untrusted_writes_and_navigation
     await runtime.open_browser(app.id, workspace.profile, 1, "digest", app.attempt_id, "answers")
     guard = context.route.call_args.args[1]
 
-    async def request(url, method="POST", navigation=False, body=None, frame_url=None):
+    async def request(url, method="POST", navigation=False, body=None, frame_url=None, resource_type="fetch"):
         route = SimpleNamespace(request=SimpleNamespace(url=url, method=method,
                                 headers={"content-type": "application/json"} if body else {}, post_data=body,
-                                is_navigation_request=lambda: navigation), continue_=AsyncMock(), abort=AsyncMock())
+                                resource_type=resource_type, is_navigation_request=lambda: navigation), continue_=AsyncMock(), abort=AsyncMock())
         if frame_url:
             route.request.frame = SimpleNamespace(url=frame_url)
         await guard(route)
         return route
+
+    original_factory = runtime.session_factory
+    runtime.session_factory = lambda: pytest.fail("Public assets do not need a database query")
+    try:
+        asset = await request("https://jobs.ashbyhq.com/static/app.js", "GET")
+        assert asset.continue_.await_count == 1
+        media = await request("https://jobs.ashbyhq.com/video.mp4", "GET", resource_type="media")
+        assert media.abort.await_count == 1
+    finally:
+        runtime.session_factory = original_factory
 
     allowed = await request("https://api.ashbyhq.com/upload")
     assert allowed.continue_.await_count == 1 and allowed.abort.await_count == 0
@@ -690,6 +701,191 @@ async def test_transient_retries_are_bounded_and_manual_resume_resets_budget(db,
     assert app.state == "FAILED" and app.progress["retry_count"] == 2
     flow.command(db, app, "resume")
     assert app.progress["retry_count"] == 0 and app.progress["retry_at"] is None
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+async def test_employer_http_retry_honors_delay_and_preserves_partial_answers(db, workspace, monkeypatch, status):
+    from jobpilot.application_errors import ApplicationSiteError
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+    adapter.prepared_answers = [{"question": "Professional summary", "answer": "Built React applications."}]
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.tick()
+    await workspace.runtime.failure(app.id, ApplicationSiteError(status, "120"))
+    db.refresh(app)
+    assert app.state == "QUEUED" and app.progress["retry_count"] == 1
+    assert app.progress["error_code"] == f"employer_http_{status}"
+    assert datetime.fromisoformat(app.progress["retry_at"]) >= now() + timedelta(seconds=118)
+    assert app.answers == adapter.prepared_answers and app.submit_intent_at is None
+    assert app.id not in workspace.runtime.sessions
+    for _ in range(2):
+        await workspace.runtime.failure(app.id, ApplicationSiteError(status))
+    db.refresh(app)
+    assert app.state == "FAILED" and app.progress["retry_count"] == 2
+
+
+@pytest.mark.parametrize("status", [400, 403, 404])
+async def test_employer_permanent_error_does_not_retry(db, workspace, status):
+    from jobpilot.application_errors import ApplicationSiteError
+    app = flow.request_application(db, workspace.job)
+    db.commit()
+    await workspace.runtime.failure(app.id, ApplicationSiteError(status))
+    db.refresh(app)
+    assert app.state == "NEEDS_HUMAN_ACTION" and not app.progress.get("retry_at")
+    assert not app.progress.get("retry_count") and app.submit_intent_at is None
+
+
+async def test_http_error_after_submit_intent_never_retries(db, workspace):
+    from jobpilot.application_errors import ApplicationSiteError
+    app = flow.request_application(db, workspace.job)
+    app.state, app.submit_intent_at = "SUBMITTING", now()
+    db.commit()
+    await workspace.runtime.failure(app.id, ApplicationSiteError(503, "120"))
+    db.refresh(app)
+    assert app.state == "SUBMISSION_UNCERTAIN" and not app.progress.get("retry_at")
+    assert not flow.claim(db, app.id)
+
+
+def stopped_form(db, workspace):
+    app = flow.request_application(db, workspace.job)
+    app.state = "NEEDS_HUMAN_ACTION"
+    app.progress = {"fields": [
+        {"question": "Are you authorized to work in Georgia?", "type": "select", "required": True, "options": ["Yes", "No"]},
+        {"question": "When can you start?", "type": "text", "required": True, "options": []},
+        {"question": "Email", "type": "email", "required": True},
+        {"question": "Resume", "type": "file", "required": True},
+    ]}
+    db.commit()
+    return app
+
+
+async def test_batch_answers_are_scoped_durable_and_used_when_resuming(db, workspace, monkeypatch):
+    from jobpilot.models import Answer
+    app = stopped_form(db, workspace)
+    attempt = app.attempt_id
+    preview = flow.detail(db, app)
+    assert len(preview["answer_fields"]) == 2
+    values = [{"id": item["id"], "answer": answer, "remember": False}
+              for item, answer in zip(preview["answer_fields"], ["Yes", "Two weeks"])]
+    flow.save_answers(db, app, preview["answer_token"], values, resume=True)
+    db.commit()
+    assert app.id == preview["id"] and app.attempt_id == attempt and app.state == "QUEUED"
+    assert db.scalar(select(func.count()).select_from(Answer)) == 0
+    adapter = mock_browser(monkeypatch, workspace.runtime)
+
+    async def prepare(page, path, engine, context):
+        assert (await engine.answer("When can you start?", context))["answer"] == "Two weeks"
+        return [await engine.choice_answer("Are you authorized to work in Georgia?", context, ["Yes", "No"])]
+
+    adapter.prepare.side_effect = prepare
+    await workspace.runtime.tick()
+    db.refresh(app)
+    assert app.state == "AWAITING_APPROVAL" and app.answers[0]["answer"] == "Yes"
+    assert app.submit_intent_at is None
+    # A different application's engine sees no application-specific answers.
+    with pytest.raises(NeedsAttention):
+        await AnswerEngine(workspace.profile, {}).answer("When can you start?", "")
+
+
+def test_batch_answers_remember_only_explicitly_selected_answers_and_reject_stale_input(db, workspace):
+    from jobpilot.models import Answer
+    app = stopped_form(db, workspace)
+    preview = flow.detail(db, app)
+    values = [{"id": field["id"], "answer": answer, "remember": index == 1}
+              for index, (field, answer) in enumerate(zip(preview["answer_fields"], ["Yes", "Two weeks"]))]
+    flow.save_answers(db, app, preview["answer_token"], values, resume=False)
+    db.commit()
+    library = list(db.scalars(select(Answer)))
+    assert [(item.question, item.answer) for item in library] == [("When can you start?", "Two weeks")]
+    with pytest.raises(ValueError, match="изменились"):
+        flow.save_answers(db, app, preview["answer_token"], values, resume=True)
+    assert app.state == "NEEDS_HUMAN_ACTION"
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "option", "submitted", "form_changed"])
+def test_batch_answer_endpoint_rejects_unrelated_stale_and_submitted_forms(db, workspace, mutation):
+    from jobpilot.automation_api import ApplicationAnswers, confirm_answers
+    app = stopped_form(db, workspace)
+    preview = flow.detail(db, app)
+    key = preview["answer_fields"][0]["id"]
+    value = "Yes"
+    if mutation == "unknown":
+        key = "f" * 64
+    elif mutation == "option":
+        value = "Invented option"
+    elif mutation == "submitted":
+        app.state, app.submit_intent_at = "SUBMITTING", now()
+    else:
+        app.progress = {**app.progress, "fields": []}
+    db.commit()
+    body = ApplicationAnswers(answer_token=preview["answer_token"], answers=[{"id": key, "answer": value}])
+    with pytest.raises(HTTPException) as caught:
+        confirm_answers(app.id, body, db)
+    assert caught.value.status_code == 409
+    db.refresh(app)
+    assert not app.progress.get("confirmed_answers")
+
+
+def test_attempted_aliases_are_skipped_before_reading_resumes(db, workspace, monkeypatch):
+    from jobpilot import tailoring, top_vacancies
+    app = flow.request_application(db, workspace.job)
+    workspace.control.mode, workspace.control.auto_apply = "autonomous", True
+    db.commit()
+    record = {**flow.job_input(workspace.job).model_dump(mode="json"), "score": 99,
+              "canonical_url": "https://jobs.ashbyhq.com/test/alias"}
+    monkeypatch.setattr(top_vacancies, "top_rows", lambda db: [SimpleNamespace(data=record)])
+    monkeypatch.setattr(tailoring, "resume_contexts", lambda *args: pytest.fail("Known role must be discarded before CV work"))
+    workspace.runtime.select_eligible()
+    assert db.scalar(select(func.count()).select_from(Application)) == 1
+
+
+async def test_empty_runtime_uses_idle_poll_interval(db, workspace):
+    await workspace.runtime.tick()
+    assert workspace.runtime.poll_seconds == settings().application_idle_poll_seconds
+
+
+def test_pending_queue_cannot_grow_past_reduced_daily_budget(db, workspace, monkeypatch):
+    from jobpilot import tailoring
+    app = flow.request_application(db, workspace.job)
+    other = Job(source_id=workspace.job.source_id, **vacancy(external_id="other", company="Other Employer",
+                canonical_url="https://jobs.ashbyhq.com/test/other").model_dump())
+    db.add(other)
+    db.flush()
+    flow.request_application(db, other)
+    workspace.control.mode, workspace.control.auto_apply = "autonomous", True
+    workspace.control.daily_limit = 1  # A reduced policy must not create a negative queue budget.
+    db.commit()
+    monkeypatch.setattr(tailoring, "resume_contexts", lambda *args: pytest.fail("No queue capacity"))
+    workspace.runtime.select_eligible()
+    assert db.scalar(select(func.count()).select_from(Application)) == 2
+
+
+def test_answer_route_inherits_authentication_and_summary_omits_full_answers(db, workspace, monkeypatch):
+    from jobpilot import api
+    from jobpilot.db import session
+    app = stopped_form(db, workspace)
+    preview = flow.detail(db, app)
+    body = {"answer_token": preview["answer_token"], "resume": False,
+            "answers": [{"id": preview["answer_fields"][0]["id"], "answer": "Yes"}]}
+    monkeypatch.setattr(settings(), "auth_required", True)
+    api.app.dependency_overrides[session] = lambda: db
+    client = TestClient(api.app)
+    try:
+        url = f"/automation/applications/{app.id}/answers"
+        assert client.post(url, json=body).status_code == 401
+        headers = {"Authorization": "Bearer " + settings().api_token.get_secret_value()}
+        response = client.post(url, json=body, headers=headers)
+        assert response.status_code == 200 and response.json()["state"] == "NEEDS_HUMAN_ACTION"
+        assert response.json()["answer_fields"][0]["answer"] == "Yes"
+        assert client.post(url, json=body, headers=headers).status_code == 409
+        summary = client.get("/automation/applications?summary=true", headers=headers)
+        assert summary.status_code == 200 and summary.json()[0]["id"] == app.id
+        assert "answers" not in summary.json()[0] and "progress" not in summary.json()[0]
+        full = client.get("/automation/applications", headers=headers)
+        assert full.status_code == 200 and "answers" in full.json()[0]
+    finally:
+        client.close()
+        api.app.dependency_overrides.clear()
 
 
 async def test_waiting_application_cannot_starve_queue(db, workspace, monkeypatch):

@@ -16,7 +16,7 @@ from . import automation
 from .config import settings
 from .db import session
 from .http import authenticate, serialize
-from .models import Application, ApplicationArtifact, Control
+from .models import Application, ApplicationArtifact, Control, Job
 from .security import ATS_HOSTS
 from .services import audit
 
@@ -95,6 +95,7 @@ def put_settings(body: AutomationSettings, db: Session = Depends(session)) -> di
         setattr(control, key, value)
     audit(db, "application_policy_updated", body.model_dump())
     db.commit()
+    automation.work_available.set()
     return get_settings(db)
 
 
@@ -113,6 +114,7 @@ def prepare(body: ApplicationInput, db: Session = Depends(session)) -> dict[str,
         mode = control.mode if control and control.enabled else "manual"
         app = automation.request_application(db, job, mode)
         db.commit()
+        automation.work_available.set()
         return automation.detail(db, app)
     except ValueError as exc:
         db.rollback()
@@ -123,12 +125,18 @@ def prepare(body: ApplicationInput, db: Session = Depends(session)) -> dict[str,
 
 
 @router.get("/applications")
-def applications(canonical_url: str = Query(default="", max_length=2000), db: Session = Depends(session)) -> list[dict[str, Any]]:
-    rows = db.scalars(select(Application).where(Application.attempt_id.is_not(None)).order_by(Application.updated_at.desc()).limit(500))
-    result = [automation.detail(db, app) for app in rows]
+def applications(canonical_url: str = Query(default="", max_length=2000), db: Session = Depends(session),
+                 summary: bool = False) -> list[dict[str, Any]]:
+    rows = [(app, job) for app, job in db.execute(select(Application, Job).join(Job)
+            .where(Application.attempt_id.is_not(None)).order_by(Application.updated_at.desc()).limit(500))]
     if canonical_url:
-        result = [r for r in result if automation.canonical(r["job"]["canonical_url"]) == automation.canonical(canonical_url)]
-    return result
+        rows = [(app, job) for app, job in rows
+                if automation.canonical(job.canonical_url) == automation.canonical(canonical_url)]
+    if summary:
+        return [{"id": app.id, "state": app.state, "updated_at": app.updated_at,
+                 "job": {"title": job.title, "company": job.company, "canonical_url": job.canonical_url}}
+                for app, job in rows]
+    return [automation.detail(db, app) for app, _ in rows]
 
 
 def get_application(db: Session, application_id: str) -> Application:
@@ -154,6 +162,33 @@ def action(application_id: str, body: ActionInput, db: Session = Depends(session
     try:
         automation.command(db, app, body.action, body.approval_token)
         db.commit()
+        automation.work_available.set()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    return automation.detail(db, app)
+
+
+class ConfirmedAnswer(BaseModel):
+    id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    answer: str = Field(min_length=1, max_length=10000)
+    remember: bool = False
+
+
+class ApplicationAnswers(BaseModel):
+    answer_token: str = Field(min_length=64, max_length=64)
+    answers: list[ConfirmedAnswer] = Field(min_length=1, max_length=100)
+    resume: bool = True
+
+
+@router.post("/applications/{application_id}/answers")
+def confirm_answers(application_id: str, body: ApplicationAnswers, db: Session = Depends(session)) -> dict[str, Any]:
+    app = get_application(db, application_id)
+    try:
+        automation.save_answers(db, app, body.answer_token,
+                                [item.model_dump() for item in body.answers], resume=body.resume)
+        db.commit()
+        automation.work_available.set()
     except ValueError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc

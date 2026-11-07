@@ -47,11 +47,15 @@ export type AutomationSettings = {
 export type ApplicationDetail = {
   id: string; job_id: string; state: string; attention: string | null; mode: string;
   progress: {step?: string; message?: string; question?: string; questions?: string[]; browser_status?: string; blocked_host?: string; resume_filename?: string;
+    retry_at?: string | null; retry_count?: number; error_code?: string | null;
     events?: {at?: string; message: string; level?: string; step?: string}[]};
   resume_id: string | null; generated_resume_url: string | null; application_url?: string | null;
   answers: {question: string; answer: string; evidence?: unknown}[];
   handoff: {question: string; answer: string | null; options: string[]}[];
+  answer_fields: {id: string; question: string; answer: string; options: string[]; required: boolean}[];
+  answer_token: string;
   job: {company: string; title: string; canonical_url: string};
   submit_intent_at: string | null; submitted_at: string | null;
   approval_token: string | null; screenshot_url: string | null;
 };
+export type ApplicationSummary = Pick<ApplicationDetail, "id" | "state" | "job">;

@@ -23,6 +23,40 @@ function artifactUrl(path: string | null) {
   return null;
 }
 
+function ApplicationAnswers({app, onSaved}: {app: ApplicationDetail; onSaved: (updated: ApplicationDetail) => void}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  return <details open><summary>Ответить на вопросы работодателя</summary>
+    <form onSubmit={event => {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const answers = app.answer_fields.map(field => ({id: field.id,
+        answer: String(data.get(field.id) || "").trim(), remember: data.has(`remember-${field.id}`)}))
+        .filter(item => item.answer);
+      if (!answers.length) {setError("Заполните хотя бы один ответ."); return;}
+      const resume = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "resume";
+      setPending(true); setError("");
+      void api<ApplicationDetail>(`automation/applications/${app.id}/answers`, "POST",
+        {answer_token: app.answer_token, answers, resume}).then(onSaved)
+        .catch(e => setError(e instanceof Error ? e.message : "Не удалось сохранить ответы"))
+        .finally(() => setPending(false));
+    }}><fieldset disabled={pending}>
+      <p className="hint">Ответы используются в этой заявке. Для повторного использования отметьте нужный ответ отдельно.</p>
+      {app.answer_fields.map(field => <div className="application-answer-input" key={field.id}>
+        <label>{field.question}{field.required ? " *" : ""}
+          {field.options.length ? <select aria-label={`Ваш ответ: ${field.question}`} name={field.id} defaultValue={field.answer}>
+            <option value="">Выберите ответ</option>{field.options.map(option => <option key={option} value={option}>{option}</option>)}
+          </select> : <textarea aria-label={`Ваш ответ: ${field.question}`} name={field.id} defaultValue={field.answer} maxLength={10000} rows={3}/>}
+        </label>
+        <label className="check-label"><input type="checkbox" name={`remember-${field.id}`}/>Использовать этот ответ для такого же вопроса в будущих заявках</label>
+      </div>)}
+      {error && <p className="notice error" role="alert">{error}</p>}
+      <div className="button-row"><button className="button primary" type="submit" value="resume">{pending ? "Сохраняем…" : "Сохранить и продолжить подготовку"}</button>
+        <button className="button" type="submit" value="save">Сохранить ответы</button></div>
+    </fieldset></form>
+  </details>;
+}
+
 export function ApplicationPanel({applicationId}: {applicationId: string}) {
   const client = useQueryClient();
   const [pending, setPending] = useState(false);
@@ -48,7 +82,6 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
   if (!app) return <div className="application-panel">{query.error ? <p className="notice error" role="alert">{query.error.message}</p> : <p role="status">Загружаем отклик…</p>}</div>;
   const resume = artifactUrl(app.generated_resume_url);
   const screenshot = artifactUrl(app.screenshot_url);
-  const question = app.progress?.question || app.progress?.questions?.[0] || "";
   const uncertain = app.state === "SUBMISSION_UNCERTAIN";
   let employerUrl: string | null = null;
   try {
@@ -58,11 +91,12 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
   return <section className="application-panel" aria-label={`Отклик: ${app.job.title}`}>
     <div className="panel-heading"><h3>Автоматический отклик</h3><span className="badge purple" role="status">{labels[app.state] || app.state}</span></div>
     <p aria-live="polite">{app.progress?.message || app.progress?.step || "Ожидаем обновления агента"}</p>
+    {app.state === "QUEUED" && app.progress?.retry_at && <p className="hint">Следующая попытка: {new Date(app.progress.retry_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"})} (Москва).</p>}
     {app.progress?.resume_filename && <small>Подобрано для вакансии: {app.progress.resume_filename}</small>}
     {app.progress?.browser_status && <small>Браузер агента: {({active: "выполняет действие", waiting: "ожидает вашего действия", closed: "сессия завершена"} as Record<string, string>)[app.progress.browser_status] || app.progress.browser_status}</small>}
     {app.progress?.blocked_host && <p className="notice error">Сайт использует проверку или обращается к неподдерживаемому сервису ({app.progress.blocked_host}). Откройте вакансию и продолжите отклик на сайте работодателя.</p>}
     {app.attention && <p className="notice error" role="alert">{app.attention}</p>}
-    {app.state === "NEEDS_HUMAN_ACTION" && <p className="hint">Откройте вакансию и завершите отклик на сайте работодателя. Это отдельная сессия: проверка на сайте не продолжит работу браузера агента автоматически.</p>}
+    {app.state === "NEEDS_HUMAN_ACTION" && <p className="hint">Заполните недостающие ответы ниже и продолжите подготовку. Если нужен вход или CAPTCHA, откройте сайт работодателя; это отдельная сессия браузера.</p>}
     {(error || query.error) && <p className="notice error" role="alert">{error || query.error?.message}</p>}
     {message && <p className="notice" role="status">{message}</p>}
     {app.state === "SUBMITTED" && <p className="notice">Сайт подтвердил отправку{app.submitted_at ? ` · ${new Date(app.submitted_at).toLocaleString("ru-RU", {timeZone: "Europe/Moscow"})} (Москва)` : ""}.</p>}
@@ -89,18 +123,12 @@ export function ApplicationPanel({applicationId}: {applicationId: string}) {
     </details>}
     {screenshot && <details><summary>Последнее состояние браузера</summary><a href={screenshot} target="_blank" rel="noreferrer">
       <img className="application-screenshot" src={screenshot} alt="Последний снимок формы отклика" loading="lazy"/></a></details>}
-    {app.state === "NEEDS_HUMAN_ACTION" && question && <details open><summary>Подтвердить ответ для этой и будущих заявок</summary>
-      <form key={question} onSubmit={e => {e.preventDefault(); const form = e.currentTarget; const body = new FormData(form);
-        setPending(true); setError(""); setMessage("");
-        void api("answers", "POST", {question: String(body.get("question")).trim(), answer: String(body.get("answer")).trim()})
-          .then(() => {setMessage("Ответ сохранён. Нажмите «Продолжить подготовку», чтобы агент проверил форму снова."); form.reset();})
-          .catch(e => setError(e instanceof Error ? e.message : "Не удалось сохранить ответ"))
-          .finally(() => setPending(false));
-      }}><fieldset disabled={pending}><label>Точный вопрос работодателя<textarea name="question" defaultValue={question} required maxLength={2000} rows={2}/></label>
-        <label>Ваш подтверждённый ответ<textarea name="answer" required maxLength={10000} rows={3}/></label>
-        <p className="hint">Сохранённый ответ будет использоваться повторно для такого же вопроса.</p>
-        <button className="button" type="submit">Сохранить подтверждённый ответ</button></fieldset></form>
-    </details>}
+    {resumable.has(app.state) && !app.submit_intent_at && app.answer_fields?.length > 0 &&
+      <ApplicationAnswers key={app.answer_token} app={app} onSaved={updated => {
+        client.setQueryData(["automation-application", app.id], updated);
+        setMessage(updated.state === "QUEUED" ? "Ответы сохранены. Подготовка продолжится автоматически." : "Ответы сохранены для этого отклика.");
+        void client.invalidateQueries({queryKey: ["automation-applications"]});
+      }}/>}
     {app.state === "AWAITING_APPROVAL" && <p className="hint">Проверьте резюме, ответы и снимок формы. Разрешение относится к текущей подготовленной версии отклика.</p>}
     <div className="button-row application-actions">
       {app.state === "AWAITING_APPROVAL" && <button className="button primary" disabled={pending || !app.approval_token}

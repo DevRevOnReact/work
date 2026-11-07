@@ -17,10 +17,11 @@ from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
 from . import automation as flow
 from .answers import AnswerEngine, NeedsAttention, RetryLater
+from .application_errors import ApplicationSiteError, check_response
 from .config import settings
 from .db import SessionLocal
 from .domain import Profile
@@ -65,6 +66,8 @@ class ApplicationRuntime:
         self.thread: threading.Thread | None = None
         self.stopping = threading.Event()
         self.last_selection = 0.0
+        self.poll_seconds: float = 2
+        self.wakeup = flow.work_available
 
     def start(self) -> None:
         # Headed Chromium requires a desktop; containers explicitly use headless.
@@ -79,6 +82,7 @@ class ApplicationRuntime:
 
     def stop(self) -> None:
         self.stopping.set()
+        self.wakeup.set()
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=3)
 
@@ -87,11 +91,14 @@ class ApplicationRuntime:
             flow.recover(db, stale_only=settings().hosted_mode)
         try:
             while not self.stopping.is_set():
+                self.wakeup.clear()
                 try:
                     await self.tick()
                 except Exception:
                     log.exception("Application dispatch failed")
-                await asyncio.sleep(2)
+                # Local HTTP commands signal after commit. Idle cloud instances
+                # need far fewer database polls, with a bounded external fallback.
+                await asyncio.to_thread(self.wakeup.wait, self.poll_seconds)
         finally:
             for application_id in list(self.sessions):
                 await self.close(application_id)
@@ -175,6 +182,7 @@ class ApplicationRuntime:
             queued = [app.id for app in db.scalars(select(Application).where(Application.state == "QUEUED")
                        .order_by(Application.created_at))
                       if not app.progress.get("retry_at") or app.progress["retry_at"] <= now().isoformat()][:20]
+        self.poll_seconds = 2 if queued or commands or self.sessions else settings().application_idle_poll_seconds
         for application_id in queued:
             if self.stopping.is_set():
                 return
@@ -200,15 +208,16 @@ class ApplicationRuntime:
             if control.mode == "autonomous" and not control.auto_apply:
                 return
             remaining, _ = flow.submission_budget(db, control)
-            if not remaining:
+            pending = db.scalar(select(func.count()).select_from(Application).where(
+                Application.state.in_(flow.ACTIVE_STATES | {"AWAITING_APPROVAL"}),
+                Application.submit_intent_at.is_(None))) or 0
+            remaining -= pending
+            if remaining <= 0:
                 return
             candidate = db.get(Candidate, 1)
             if not candidate:
                 return
             profile = Profile.model_validate(candidate.facts)
-            contexts = resume_contexts(db, profile)
-            if not contexts:
-                return
             records = []
             for row in top_rows(db):
                 published = publication(row.data.get("published_at"))
@@ -218,14 +227,31 @@ class ApplicationRuntime:
                 records.append(row.data)
             for search in db.scalars(select(SavedSearch).where(SavedSearch.enabled.is_(True))):
                 records.extend(search.results)
-            seen: set[str] = set()
-            queued = 0
+            # Discard known aliases before reading CV files or rescoring. This
+            # also avoids re-evaluating the same vacancy from several searches.
+            from .vacancy_identity import identity
+            attempted = db.execute(select(Application, Job).join(Job).where(
+                (Application.attempt_id.is_not(None)) | (Application.submit_intent_at.is_not(None)) |
+                Application.state.in_(flow.ACTIVE_STATES | flow.WAIT_STATES | flow.FINAL_STATES | {"REJECTED", "CANCELLED"}))).all()
+            attempted_urls = {flow.canonical(job.canonical_url) for _, job in attempted}
+            attempted_roles = {identity(flow.job_input(job).model_dump()) for _, job in attempted}
+            candidates: dict[str, dict[str, Any]] = {}
+            excluded = {c.strip().casefold() for c in control.excluded_companies}
             for record in sorted(records, key=lambda r: -r.get("score", 0)):
                 url = record.get("canonical_url", "")
-                if (not url or url in seen
-                        or record.get("company", "").strip().casefold() in {c.strip().casefold() for c in control.excluded_companies}):
+                role = identity(record)
+                if (not url or flow.canonical(url) in attempted_urls or role in attempted_roles
+                        or record.get("company", "").strip().casefold() in excluded):
                     continue
-                seen.add(url)
+                candidates.setdefault(role, record)
+            if not candidates:
+                return
+            contexts = resume_contexts(db, profile)
+            if not contexts:
+                return
+            queued = 0
+            for record in candidates.values():
+                url = record.get("canonical_url", "")
                 try:
                     verified_application_url(url, control.authorized_domains)
                     job = flow.resolve_job(db, url)
@@ -311,11 +337,20 @@ class ApplicationRuntime:
 
         async def guard(route: Any) -> None:
             request = route.request
+            if getattr(request, "resource_type", "") in {"media", "font"}:
+                # Application controls and challenge images remain available.
+                await route.abort()
+                return
             p = urlsplit(request.url)
             origin = f"{p.scheme}://{p.netloc}"
             if origin not in safe_cache:
                 safe_cache[origin] = await public_url(request.url)
             safe = safe_cache[origin] and not p.username and not p.password
+            if safe and not request.is_navigation_request() and request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+                # Public read-only assets were already permitted independently
+                # of submit policy. They do not need two database reads each.
+                await route.continue_()
+                return
             # User edits to policy take effect before the next network action.
             with self.session_factory() as db:
                 control = db.get(Control, 1)
@@ -365,8 +400,9 @@ class ApplicationRuntime:
         await context.route_web_socket("**", lambda socket: socket.close())
         page = await context.new_page()
         browser_session.page = page
+        adapter.watch(page)
         page.set_default_timeout(settings().browser_timeout_ms)
-        await page.goto(url, wait_until="domcontentloaded")
+        check_response(await page.goto(url, wait_until="domcontentloaded"))
         await page.wait_for_timeout(700)
         return browser_session
 
@@ -409,7 +445,9 @@ class ApplicationRuntime:
             app = db.get(Application, application_id)
             assert app is not None
             flow.set_step(db, app, "ANSWERING_QUESTIONS", "Анализируем форму и готовим подтверждённые ответы", browser_status="active")
-            engine = AnswerEngine(profile, {a.question: a.answer for a in db.scalars(select(Answer))})
+            approved_answers = {a.question: a.answer for a in db.scalars(select(Answer))}
+            scoped = {item["question"]: item["answer"] for item in app.progress.get("confirmed_answers", {}).values()}
+            engine = AnswerEngine(profile, {**approved_answers, **scoped})
             job = db.get(Job, app.job_id)
             assert job
             description = f"{job.title}\n{job.company}\n{job.description}"
@@ -581,22 +619,29 @@ class ApplicationRuntime:
                 db.commit()
                 await self.close(application_id)
                 return
-            transient = isinstance(exc, (TimeoutError, ConnectionError, BrowserTimeout)) or (
+            site_error = exc if isinstance(exc, ApplicationSiteError) else None
+            transient = bool(site_error and site_error.transient) or isinstance(exc, (TimeoutError, ConnectionError, BrowserTimeout)) or (
                 isinstance(exc, BrowserError) and any(reason in str(exc) for reason in (
                     "net::ERR_CONNECTION", "net::ERR_TIMED_OUT", "net::ERR_NETWORK_CHANGED",
                     "net::ERR_NAME_NOT_RESOLVED", "Target page, context or browser has been closed")))
             retries = app.progress.get("retry_count", 0)
             if transient and not app.submit_intent_at and retries < 2 and not self.stopping.is_set():
-                delay = 15 * (3 ** retries)
+                delay = max(15 * (3 ** retries), site_error.retry_after if site_error else 0,
+                            60 if site_error and site_error.status == 429 else 0)
+                if browser:
+                    partial = getattr(browser.adapter, "prepared_answers", None)
+                    if isinstance(partial, list) and partial:
+                        app.answers = partial
                 flow.set_step(db, app, "QUEUED", f"Временный сбой. Повторим подготовку через {delay} сек.",
                               retry_count=retries + 1, retry_at=(now() + timedelta(seconds=delay)).isoformat(),
-                              browser_status="closed", error_code="temporary_failure")
+                              browser_status="closed", error_code=site_error.code if site_error else "temporary_failure")
                 app.command = None
                 db.commit()
                 await self.close(application_id)
                 return
             message = str(exc)[:1500] if isinstance(exc, (NeedsAttention, ValueError)) else f"Ошибка браузера: {type(exc).__name__}. Возобновите отклик после проверки."
-            state = "SUBMISSION_UNCERTAIN" if app.submit_intent_at else "NEEDS_HUMAN_ACTION" if isinstance(exc, (NeedsAttention, ValueError)) else "FAILED"
+            state = ("SUBMISSION_UNCERTAIN" if app.submit_intent_at else "FAILED" if transient else
+                     "NEEDS_HUMAN_ACTION" if isinstance(exc, (NeedsAttention, ValueError)) else "FAILED")
             questions = getattr(exc, "questions", [])
             app.answers = getattr(exc, "answers", app.answers)
             if browser and not app.submit_intent_at and callable(getattr(browser.adapter, "handoff", None)):
@@ -622,7 +667,7 @@ class ApplicationRuntime:
             flow.set_step(db, app, state, message, fields=questions,
                           questions=[q.get("question", "") for q in questions],
                           retry_at=None, error_code="submission_uncertain" if app.submit_intent_at else
-                          "needs_input" if isinstance(exc, (NeedsAttention, ValueError)) else "preparation_failed",
+                          site_error.code if site_error else "needs_input" if isinstance(exc, (NeedsAttention, ValueError)) else "preparation_failed",
                           browser_status="waiting" if browser else "closed")
             close_browser = state == "FAILED" or (state == "NEEDS_HUMAN_ACTION" and settings().application_browser_headless)
             if close_browser:

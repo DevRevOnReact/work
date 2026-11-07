@@ -1,12 +1,14 @@
 """Conservative, explainable preferences inferred from explicit rejection reasons."""
 import re
+from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .models import Audit
 
 
-def preferences(db):
+def preferences(db: Session) -> set[tuple[str, str]]:
     # The latest explanation for a vacancy replaces earlier explanations.
     latest = {}
     for row in db.scalars(select(Audit).where(Audit.kind == "vacancy_feedback").order_by(Audit.id)):
@@ -23,7 +25,7 @@ def preferences(db):
     return rules
 
 
-def adjust(job, result, rules):
+def adjust(job: Any, result: dict[str, Any], rules: set[tuple[str, str]]) -> dict[str, Any]:
     matched = [field for field, value in rules if str(getattr(job, field, "")).strip().casefold() == value]
     if not matched:
         return result

@@ -1,5 +1,7 @@
 # JobPilot
 
+Обновлённый алгоритм автооткликов, обработки вопросов и ошибок: [описание на русском](docs/auto-apply-workflow.ru.md). API и правила совместимости описаны в [application-automation.md](docs/application-automation.md).
+
 Local, single-user resume search and employer discovery. No access key or login is needed in the default development configuration.
 
 ## Lightweight Docker start

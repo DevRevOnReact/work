@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { ApplicationDetail, AutomationSettings as Settings } from "@/lib/types";
+import type { ApplicationSummary, AutomationSettings as Settings } from "@/lib/types";
 import { ApplicationPanel } from "./application-panel";
 
 const splitLines = (value: string) => [...new Set(value.split(/[\n,]+/).map(item => item.trim()).filter(Boolean))];
@@ -57,7 +57,9 @@ function SettingsForm({settings, onSaved}: {settings: Settings; onSaved: () => v
 
 export function AutomationSettings() {
   const settings = useQuery<Settings>({queryKey: ["automation-settings"], queryFn: () => api("automation/settings"), retry: false});
-  const history = useQuery<ApplicationDetail[]>({queryKey: ["automation-applications"], queryFn: () => api("automation/applications"), retry: false, refetchInterval: 10000});
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const history = useQuery<ApplicationSummary[]>({queryKey: ["automation-applications"], queryFn: () => api("automation/applications?summary=true"),
+    enabled: historyOpen, retry: false, refetchInterval: historyOpen ? 30000 : false});
   const [selected, setSelected] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   return <section className="panel padded automation-settings"><h2>Отклики за вас</h2>
@@ -69,7 +71,7 @@ export function AutomationSettings() {
       {!settings.data.browser_available && <p className="notice error">Агент временно недоступен. Автоотправку можно включить после восстановления соединения.</p>}
       {saved && <p className="notice" role="status">Параметры автоматических откликов сохранены.</p>}
       <SettingsForm key={JSON.stringify(settings.data)} settings={settings.data} onSaved={() => setSaved(true)}/></>}
-    <details className="application-history"><summary>История откликов ({history.data?.length || 0})</summary>
+    <details className="application-history" onToggle={event => setHistoryOpen(event.currentTarget.open)}><summary>История откликов{history.data ? ` (${history.data.length})` : ""}</summary>
       {history.error && <p className="notice error" role="alert">{history.error.message}</p>}
       {history.isPending && <p role="status">Загружаем историю…</p>}
       {history.data?.map(app => <div className="resume-row" key={app.id}><div><strong>{app.job.title}</strong><small>{app.job.company} · {app.state}</small></div>

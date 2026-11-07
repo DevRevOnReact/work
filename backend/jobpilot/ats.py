@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import Frame, Locator, Page
 
 from .answers import LEGAL, AnswerEngine, NeedsAttention, normalize
+from .application_errors import ApplicationSiteError, check_response
 
 Progress = Callable[[str, str], Awaitable[None]]
 
@@ -96,12 +97,31 @@ class GenericFormAdapter:
         self.prepared_answers: list[dict[str, Any]] = []
         self.answer_engine: AnswerEngine | None = None
         self.answer_context = ""
+        self.navigation_error: ApplicationSiteError | None = None
+        self._watched_pages: set[int] = set()
+
+    def watch(self, page: Page) -> None:
+        if id(page) in self._watched_pages:
+            return
+        self._watched_pages.add(id(page))
+
+        def response_received(response: Any) -> None:
+            if response.request.is_navigation_request() and response.request.frame == page.main_frame:
+                self.navigation_error = None
+                try:
+                    check_response(response)
+                except ApplicationSiteError as exc:
+                    self.navigation_error = exc
+
+        page.on("response", response_received)
 
     async def report(self, step: str, detail: str) -> None:
         if self.progress:
             await self.progress(step, detail)
 
     async def guard(self, page: Page) -> None:
+        if self.navigation_error:
+            raise self.navigation_error
         for frame in page.frames:
             if frame.is_detached() or not await frame.locator("body").count():
                 continue
@@ -302,7 +322,7 @@ class GenericFormAdapter:
             self._opened_urls.add(href)
             await self.report("opening_form", "Открытие страницы формы отклика")
             # Keep target=_blank application links in the guarded agent session.
-            await page.goto(href, wait_until="domcontentloaded")
+            check_response(await page.goto(href, wait_until="domcontentloaded"))
             await page.wait_for_timeout(300)
             return True
         if len(links) > 1:
@@ -332,7 +352,7 @@ class GenericFormAdapter:
                     if not self.can_navigate(target, page.url) or target in self._opened_urls:
                         raise NeedsAttention("Разрешите домен формы из Apply в настройках откликов")
                     self._opened_urls.add(target)
-                    await page.goto(target, wait_until="domcontentloaded")
+                    check_response(await page.goto(target, wait_until="domcontentloaded"))
                 finally:
                     for popup in opened:
                         await popup.close()
@@ -485,6 +505,7 @@ class GenericFormAdapter:
     async def prepare(
         self, page: Page, resume: Path, engine: AnswerEngine, context: str
     ) -> list[dict[str, Any]]:
+        self.watch(page)
         self.prepared_answers = []
         self.answer_engine, self.answer_context = engine, context
         await self.guard(page)

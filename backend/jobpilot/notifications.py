@@ -72,9 +72,12 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
     queued = 0
     current = now()
     for job in jobs:
-        if not qualifies(job, current) or job.get("review_status") == "approved":
+        if not qualifies(job, current):
             continue
-        if matching_reviews(db, job):
+        if job.get("review_status") == "approved" or matching_reviews(db, job):
+            # A known URL may acquire a new title, then a new URL. Reserve new
+            # aliases even when a review already suppresses this notification.
+            claim_delivery(db, job)
             continue
         published = publication(job["published_at"])
         assert published is not None

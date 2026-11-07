@@ -36,6 +36,9 @@ def main():
         state = ["PREPARING", "NEEDS_HUMAN_ACTION", "SUBMISSION_UNCERTAIN", "AWAITING_APPROVAL"][index]
         return {
             "id": f"fixture-{index}", "job_id": str(index), "state": state, "mode": "manual",
+            "answer_token": "a" * 64,
+            "answer_fields": [{"id": "1" * 64, "question": "Are you authorized to work in Georgia?", "answer": "", "required": True, "options": ["Yes", "No"]},
+                              {"id": "2" * 64, "question": "When can you start?", "answer": "", "required": True, "options": []}] if index == 1 else [],
             "attention": "Подтвердите право на работу" if index == 1 else None,
             "progress": {"step": "preparing", "message": "Проверяем форму",
                          "questions": ["Are you authorized to work in Georgia?"] if index == 1 else [],
@@ -76,7 +79,18 @@ def main():
         elif path.startswith("automation/applications/"):
             identity = path.split("/")[2]
             app = apps[identity]
-            if path.endswith("/action"):
+            if path.endswith("/answers"):
+                assert body["answer_token"] == app["answer_token"]
+                assert len(body["answers"]) == 2
+                assert [answer["answer"] for answer in body["answers"]] == ["Yes", "Two weeks"]
+                assert all(not answer["remember"] for answer in body["answers"])
+                approved_answers.extend(body["answers"])
+                app["answer_token"] = "b" * 64
+                for field, answer in zip(app["answer_fields"], body["answers"]):
+                    field["answer"] = answer["answer"]
+                if body["resume"]:
+                    app.update(state="AWAITING_APPROVAL", attention=None)
+            elif path.endswith("/action"):
                 action = body["action"]
                 actions.append((identity, action))
                 if action == "approve":
@@ -140,12 +154,16 @@ def main():
         second.get_by_role("button", name="Auto Apply", exact=True).click()
         expect(second.get_by_text("Вопросы и ответы для ручного отклика", exact=True)).to_be_visible()
         expect(second.get_by_role("button", name="Скопировать ответ", exact=True)).to_be_visible()
-        expect(second.get_by_label("Точный вопрос работодателя")).to_have_value("Are you authorized to work in Georgia?")
-        second.get_by_label("Ваш подтверждённый ответ").fill("Yes, confirmed for Georgia.")
-        second.get_by_role("button", name="Сохранить подтверждённый ответ", exact=True).click()
-        expect(second.get_by_text("Ответ сохранён.", exact=False)).to_be_visible()
-        second.get_by_role("button", name="Продолжить подготовку", exact=True).click()
+        second.get_by_label("Ваш ответ: Are you authorized to work in Georgia?", exact=True).select_option("Yes")
+        second.get_by_label("Ваш ответ: When can you start?", exact=True).fill("Two weeks")
+        page.screenshot(path=str(output / "application-answers-desktop.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        page.screenshot(path=str(output / "application-answers-mobile.png"), full_page=True)
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        second.get_by_role("button", name="Сохранить и продолжить подготовку", exact=True).click()
         expect(second.get_by_text("Ожидает разрешения на отправку", exact=True)).to_be_visible()
+        assert len(approved_answers) == 2
         second.get_by_role("button", name="Пауза", exact=True).click()
         expect(second.get_by_text("На паузе", exact=True)).to_be_visible()
         second.get_by_role("button", name="Продолжить подготовку", exact=True).click()
@@ -168,6 +186,14 @@ def main():
         expect(page.locator(".top-vacancy").nth(0).get_by_text("Отправка подтверждена", exact=True)).to_be_visible()
         assert sum(action == "approve" for _, action in actions) == 1
 
+        linked_id = "11111111-1111-4111-8111-111111111111"
+        apps[linked_id] = {**apps["fixture-0"], "id": linked_id}
+        page.goto(f"{base}/?application={linked_id}", wait_until="networkidle")
+        expect(page.get_by_role("heading", name="Отклик", exact=True)).to_be_visible()
+        expect(page.get_by_text("Отправка подтверждена", exact=True)).to_be_visible()
+        page.reload(wait_until="networkidle")
+        expect(page.get_by_text("Отправка подтверждена", exact=True)).to_be_visible()
+
         page.get_by_role("button", name="Резюме и профиль", exact=True).click()
         expect(page.get_by_role("heading", name="Отклики за вас", exact=True)).to_be_visible()
         toggle = page.get_by_role("switch", name="Отправлять подходящие отклики автоматически")
@@ -189,7 +215,7 @@ def main():
         page.get_by_role("button", name="Сохранить статус", exact=True).click()
         expect(page.get_by_text("Право на работу подтверждено", exact=True)).to_be_visible()
         assert profile["work_authorization"] == {"Georgia": True}
-        assert approved_answers == [{"question": "Are you authorized to work in Georgia?", "answer": "Yes, confirmed for Georgia."}]
+        assert [item["answer"] for item in approved_answers] == ["Yes", "Two weeks"]
         assert ("fixture-0", "approve") in actions and ("fixture-2", "verify") in actions
 
         # Navigation belongs to the agent's browser. Blockers leave the dashboard
