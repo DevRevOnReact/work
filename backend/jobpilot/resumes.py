@@ -1,5 +1,6 @@
 """Local resume extraction and activation. No inferred identity or legal declarations."""
 
+import hashlib
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -59,6 +60,22 @@ class ParsedResume:
 
 class ResumeParseError(ValueError):
     """A localized, safe error that can be returned to the client."""
+
+
+def verified_resume(db: Session, resume: Resume, records: dict[str, Any]) -> ParsedResume:
+    """Reuse extracted data only for the verified original and parser version."""
+    from .resume_storage import read_file
+
+    content = read_file(db, resume)
+    if hashlib.sha256(content).hexdigest() != resume.sha256:
+        raise ValueError("Нарушена целостность файла резюме. Загрузите его повторно")
+    record = records.get(resume.id, {})
+    # Records created before versioning used the same extractor.
+    if (record.get("sha256") == resume.sha256 and record.get("parser_version", 1) == 1
+            and isinstance(record.get("text"), str) and record["text"]
+            and isinstance(record.get("facts"), dict) and isinstance(record.get("warnings"), list)):
+        return ParsedResume(record["text"], record["facts"], record["warnings"])
+    return parse_resume(content, resume.filename)
 
 
 def _recognized(text: str, terms: tuple[str, ...]) -> list[str]:
@@ -289,6 +306,7 @@ def activate_resume(db: Session, candidate: Candidate, resume: Resume, parsed: P
     records = dict(candidate.facts.get("resumes", {}))
     records[resume.id] = {
         "filename": resume.filename, "sha256": resume.sha256,
+        "parser_version": 1,
         "media_type": MEDIA_TYPES[Path(resume.filename).suffix.lower()],
         "text": parsed.text, "facts": parsed.facts, "warnings": parsed.warnings,
     }

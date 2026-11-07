@@ -50,7 +50,9 @@ def search_profile(db: Session, resume_id: str) -> Profile:
     # Keep separately entered location and authorization, but use only the chosen
     # document's extracted experience and skills, never the active document's.
     from .resumes import extract_facts
-    parsed_facts, _ = extract_facts(record["text"])
+    parsed_facts = record.get("facts")
+    if not isinstance(parsed_facts, dict):
+        parsed_facts, _ = extract_facts(record["text"])
     facts = {**candidate.facts, **parsed_facts,
              "location": candidate.facts.get("location", "") or parsed_facts.get("location", ""),
              "active_resume_id": resume_id,

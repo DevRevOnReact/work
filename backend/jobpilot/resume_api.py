@@ -22,6 +22,7 @@ from .resumes import (
     MEDIA_TYPES,
     activate_resume,
     parse_resume,
+    verified_resume,
 )
 from .resume_storage import read_file, store_file
 from .services import (
@@ -102,17 +103,11 @@ def activate_uploaded_resume(resume_id: str, db: Session = Depends(session)) -> 
     if candidate is None:
         raise HTTPException(409, "Профиль кандидата отсутствует")
     try:
-        content = read_file(db, resume)
+        parsed = verified_resume(db, resume, candidate.facts.get("resumes", {}))
     except OSError as exc:
         raise HTTPException(409, "Файл резюме недоступен. Загрузите его повторно") from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    if hashlib.sha256(content).hexdigest() != resume.sha256:
-        raise HTTPException(409, "Нарушена целостность файла резюме. Загрузите его повторно")
-    try:
-        parsed = parse_resume(content, resume.filename)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
     count = activate_resume(db, candidate, resume, parsed)
     db.commit()
     return {

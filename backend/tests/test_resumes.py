@@ -281,6 +281,24 @@ def test_activation_replaces_previous_resume_facts(client, db):
     assert {r["id"] for r in listed if r["active"]} == {first["id"]}
 
 
+def test_activation_and_selection_reuse_verified_extraction(client, db, monkeypatch):
+    from jobpilot import resumes
+    from jobpilot.domain import Profile
+    from jobpilot.tailoring import resume_contexts
+
+    first = upload(client, "Jane Doe\nReact TypeScript").json()
+    second = upload(client, "Jane Doe\nPython Django", "other.txt").json()
+
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("A cached resume was parsed again")
+
+    monkeypatch.setattr(resumes, "parse_resume", unexpected_parse)
+    assert client.post(f"/resumes/{first['id']}/activate").status_code == 200
+    contexts = {resume.id: profile for resume, profile in resume_contexts(db, Profile())}
+    assert contexts[first["id"]].skills == ["React", "TypeScript"]
+    assert contexts[second["id"]].skills == ["Python", "Django"]
+
+
 def test_profile_partial_save_protects_provenance_and_rescores(client, db):
     resume = upload(client, "Jane Doe\nReact").json()
     before = client.get("/profile").json()

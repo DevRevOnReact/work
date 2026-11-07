@@ -15,9 +15,8 @@ from sqlalchemy.orm import Session
 
 from .answers import NeedsAttention
 from .domain import JobInput, Profile, _contains, evaluate
-from .models import Job, Resume
-from .resume_storage import read_file
-from .resumes import parse_resume
+from .models import Candidate, Job, Resume
+from .resumes import verified_resume
 from .services import job_input
 
 
@@ -33,9 +32,11 @@ def resume_contexts(db: Session, profile: Profile) -> list[tuple[Resume, Profile
         "notice_period", "legal_answers",
     )
     contexts = []
+    candidate = db.get(Candidate, 1)
+    records = candidate.facts.get("resumes", {}) if candidate else {}
     for resume in db.scalars(select(Resume).order_by(Resume.created_at.desc(), Resume.id)):
         try:
-            parsed = parse_resume(read_file(db, resume), resume.filename)
+            parsed = verified_resume(db, resume, records)
         except (OSError, ValueError):
             continue
         facts: dict[str, Any] = dict(parsed.facts)
