@@ -17,7 +17,7 @@ from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 
 from . import automation as flow
 from .answers import AnswerEngine, NeedsAttention, RetryLater
@@ -25,7 +25,7 @@ from .application_errors import ApplicationSiteError, check_response
 from .config import settings
 from .db import SessionLocal
 from .domain import Profile
-from .models import Answer, Application, Candidate, Control, Job, SavedSearch, now
+from .models import Answer, Application, Candidate, Control, Job, Resume, SavedSearch, TopVacancy, VacancyReview, now
 from .security import (
     ATS_API_HOSTS,
     automation_provider,
@@ -68,6 +68,8 @@ class ApplicationRuntime:
         self.last_selection = 0.0
         self.poll_seconds: float = 2
         self.wakeup = flow.work_available
+        self.selection_revision: Any = None
+        self.selection_checked_at = 0.0
 
     def start(self) -> None:
         # Headed Chromium requires a desktop; containers explicitly use headless.
@@ -139,7 +141,7 @@ class ApplicationRuntime:
     async def tick(self) -> None:
         # Commands are persisted and observed even when the browser process died.
         with self.session_factory() as db:
-            commands = [(a.id, a.command) for a in db.scalars(select(Application).where(Application.command.is_not(None)))]
+            commands = list(db.execute(select(Application.id, Application.command).where(Application.command.is_not(None))))
         for application_id, command in commands:
             if command in {"cancel", "pause"}:
                 await self.close(application_id)
@@ -179,9 +181,10 @@ class ApplicationRuntime:
             self.select_eligible()
             self.last_selection = time.monotonic()
         with self.session_factory() as db:
-            queued = [app.id for app in db.scalars(select(Application).where(Application.state == "QUEUED")
-                       .order_by(Application.created_at))
-                      if not app.progress.get("retry_at") or app.progress["retry_at"] <= now().isoformat()][:20]
+            retry_at = Application.progress["retry_at"].as_string()
+            queued = list(db.scalars(select(Application.id).where(Application.state == "QUEUED",
+                or_(retry_at.is_(None), retry_at == "", retry_at <= now().isoformat()))
+                .order_by(Application.created_at).limit(20)))
         self.poll_seconds = 2 if queued or commands or self.sessions else settings().application_idle_poll_seconds
         for application_id in queued:
             if self.stopping.is_set():
@@ -214,6 +217,22 @@ class ApplicationRuntime:
             remaining -= pending
             if remaining <= 0:
                 return
+            # Repeated selection used to download every CV and every saved
+            # description even when no input changed. Poll narrow revisions;
+            # final preparation/submission always revalidate current full facts.
+            revision = (
+                db.scalar(select(Candidate.version).where(Candidate.id == 1)),
+                tuple(db.execute(select(Resume.id, Resume.sha256).order_by(Resume.id))),
+                tuple(db.execute(select(SavedSearch.id, SavedSearch.resume_id, SavedSearch.enabled,
+                    SavedSearch.completed_at, SavedSearch.status, SavedSearch.result_count).order_by(SavedSearch.id))),
+                tuple(db.execute(select(func.count(TopVacancy.id), func.max(TopVacancy.updated_at))).one()),
+                tuple(db.execute(select(func.count(VacancyReview.id), func.max(VacancyReview.updated_at))).one()),
+                db.scalar(select(func.count()).select_from(Application)),
+                pending, remaining, control.mode, control.min_score,
+                tuple(control.authorized_domains), tuple(control.excluded_companies),
+            )
+            if revision == self.selection_revision and time.monotonic() - self.selection_checked_at < 300:
+                return
             candidate = db.get(Candidate, 1)
             if not candidate:
                 return
@@ -245,6 +264,7 @@ class ApplicationRuntime:
                     continue
                 candidates.setdefault(role, record)
             if not candidates:
+                self.selection_revision, self.selection_checked_at = revision, time.monotonic()
                 return
             contexts = resume_contexts(db, profile)
             if not contexts:
@@ -273,6 +293,7 @@ class ApplicationRuntime:
                 except (ValueError, NeedsAttention):
                     continue
             db.commit()
+            self.selection_revision, self.selection_checked_at = revision, time.monotonic()
 
     async def checkpoint(self, application_id: str) -> None:
         with self.session_factory() as db:
@@ -353,12 +374,13 @@ class ApplicationRuntime:
                 return
             # User edits to policy take effect before the next network action.
             with self.session_factory() as db:
-                control = db.get(Control, 1)
-                current = db.get(Application, application_id)
-                allowed = set(control.authorized_domains) if control else set()
-                enabled = bool(control and control.enabled and current and current.state not in {"CANCELLED", "PAUSED"})
-                has_intent = bool(current and current.submit_intent_at)
-                human_action = bool(current and current.state == "NEEDS_HUMAN_ACTION")
+                policy = db.execute(select(Control.authorized_domains, Control.enabled, Application.state,
+                    Application.submit_intent_at).select_from(Application).join(Control, Control.id == 1)
+                    .where(Application.id == application_id)).first()
+                allowed = set(policy.authorized_domains) if policy else set()
+                enabled = bool(policy and policy.enabled and policy.state not in {"CANCELLED", "PAUSED"})
+                has_intent = bool(policy and policy.submit_intent_at)
+                human_action = bool(policy and policy.state == "NEEDS_HUMAN_ACTION")
             # Following an authorized Apply link can change ATS provider, including
             # an embedded application frame. Authorize only that frame's ATS APIs.
             try:

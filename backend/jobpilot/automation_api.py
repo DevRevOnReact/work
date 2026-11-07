@@ -127,15 +127,18 @@ def prepare(body: ApplicationInput, db: Session = Depends(session)) -> dict[str,
 @router.get("/applications")
 def applications(canonical_url: str = Query(default="", max_length=2000), db: Session = Depends(session),
                  summary: bool = False) -> list[dict[str, Any]]:
+    if summary:
+        summary_rows = db.execute(select(Application.id, Application.state, Application.updated_at,
+            Job.title, Job.company, Job.canonical_url).join(Job, Application.job_id == Job.id)
+            .where(Application.attempt_id.is_not(None)).order_by(Application.updated_at.desc()).limit(500))
+        return [{"id": row.id, "state": row.state, "updated_at": row.updated_at,
+                 "job": {"title": row.title, "company": row.company, "canonical_url": row.canonical_url}}
+                for row in summary_rows if not canonical_url or automation.canonical(row.canonical_url) == automation.canonical(canonical_url)]
     rows = [(app, job) for app, job in db.execute(select(Application, Job).join(Job)
             .where(Application.attempt_id.is_not(None)).order_by(Application.updated_at.desc()).limit(500))]
     if canonical_url:
         rows = [(app, job) for app, job in rows
                 if automation.canonical(job.canonical_url) == automation.canonical(canonical_url)]
-    if summary:
-        return [{"id": app.id, "state": app.state, "updated_at": app.updated_at,
-                 "job": {"title": job.title, "company": job.company, "canonical_url": job.canonical_url}}
-                for app, job in rows]
     return [automation.detail(db, app) for app, _ in rows]
 
 

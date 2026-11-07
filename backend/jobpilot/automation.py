@@ -66,6 +66,12 @@ def set_step(db: Session, app: Application, state: str, message: str, **extra: A
     audit(db, "application_progress", {"from": before, "to": state, "message": message}, app)
 
 
+def contact_facts(db: Session) -> dict[str, Any]:
+    keys = ("full_name", "email", "phone", "linkedin", "github", "portfolio")
+    return dict(db.execute(select(*(Candidate.facts[key].label(key) for key in keys))
+                .where(Candidate.id == 1)).mappings().first() or {})
+
+
 def notify(db: Session, app: Application, job: Job, message: str) -> None:
     """Reuse the search notification queue and its rate-limit aware delivery."""
     from .models import SearchNotification
@@ -80,8 +86,7 @@ def notify(db: Session, app: Application, job: Job, message: str) -> None:
     if not search_id:
         return
     from .handoff import questions_and_answers, redact
-    candidate = db.get(Candidate, 1)
-    facts = candidate.facts if candidate else {}
+    facts = contact_facts(db)
     lines = [f"JobPilot · {redact(message, facts)}", f"{job.title} — {job.company}",
              f"Вакансия: {job.canonical_url}"]
     if app.progress.get("resume_filename"):
@@ -293,8 +298,7 @@ def save_answers(db: Session, app: Application, token: str, values: list[dict[st
         raise ValueError("Ответы можно изменить только в остановленной подготовке до отправки")
     if token != answer_token(app):
         raise ValueError("Вопросы или ответы изменились; обновите карточку отклика")
-    candidate = db.get(Candidate, 1)
-    allowed = {item["id"] for item in answer_fields(app, candidate.facts if candidate else {})}
+    allowed = {item["id"] for item in answer_fields(app, contact_facts(db))}
     questions = {hashlib.sha256(normalize(str(item.get("question") or "")).encode()).hexdigest(): item
                  for item in app.progress.get("fields", [])}
     keys = [item["id"] for item in values]
@@ -379,10 +383,10 @@ def detail(db: Session, app: Application) -> dict[str, Any]:
     from .handoff import questions_and_answers
     job = db.get(Job, app.job_id)
     result = serialize(app)
-    candidate = db.get(Candidate, 1)
+    facts = contact_facts(db)
     result["handoff"] = questions_and_answers(app.answers or [], (app.progress or {}).get("fields", []),
-                                               candidate.facts if candidate else {})
-    result["answer_fields"] = answer_fields(app, candidate.facts if candidate else {})
+                                               facts)
+    result["answer_fields"] = answer_fields(app, facts)
     result["answer_token"] = answer_token(app)
     root = f"/automation/applications/{app.id}/files"
     resume_filename = "resume.pdf" if app.progress.get("uploaded_resume_filename") == "resume.pdf" else "resume.docx"

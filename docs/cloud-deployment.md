@@ -88,6 +88,14 @@ cloud run alone; runs older than 20 minutes can be recovered.
 
 ## Durability and limits
 
+When a release is intentionally deferred, a `[skip render]` commit still runs
+code CI but skips Render's automatic deployment and the automatic deployment /
+Telegram verification job. This avoids waking an unavailable database repeatedly.
+After the provider quota is restored, use Render **Manual Deploy → Deploy latest
+commit**, then dispatch **Verify deployment and Telegram** for the current main
+commit. Do not replace the persistent database or import an older local copy to
+work around an exhausted quota.
+
 Render Free sleeps after 15 minutes without inbound traffic; the first visit can
 take longer. Local disk changes disappear on restart. CV files are therefore stored
 in PostgreSQL along with profiles, company evidence, results and notification state.

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select
+from sqlalchemy import Select, case, delete, or_, select
 from sqlalchemy.orm import Session
 
 from .db import session
@@ -73,9 +73,18 @@ def vacancy_identity(job: dict[str, Any]) -> tuple[str, ...]:
     return (identity(job),)
 
 
-def top_rows(db: Session, provider: str = "", *, favorites: bool = False) -> list[TopVacancy]:
+def top_rows(db: Session, provider: str = "", *, favorites: bool = False, summary: bool = False) -> list[TopVacancy]:
     current = now()
-    query = select(TopVacancy).where(
+    fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at",
+              "publication_label", "eligibility", "review_status", "score")
+    metadata = [column for column in TopVacancy.__table__.columns if column.name != "data"]
+    query: Select[Any] = select(TopVacancy)
+    if summary:
+        query = select(*metadata, *(TopVacancy.data[key].label("data_" + key) for key in fields),
+            TopVacancy.data["explanation"]["recommendable"].label("recommendable"),
+            case((TopVacancy.data["eligibility"].as_string() == "unknown",
+                  TopVacancy.data["description"].as_string()), else_="").label("description"))
+    query = query.where(
         TopVacancy.score >= MIN_SCORE,
         or_(TopVacancy.favorite.is_(True), TopVacancy.published_at >= current - timedelta(hours=WINDOW_HOURS)),
         TopVacancy.published_at <= current,
@@ -84,7 +93,20 @@ def top_rows(db: Session, provider: str = "", *, favorites: bool = False) -> lis
         query = query.where(TopVacancy.favorite.is_(True))
     if provider:
         query = query.where(TopVacancy.data["provider"].as_string() == provider)
-    rows = db.scalars(query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id))
+    query = query.order_by(TopVacancy.score.desc(), TopVacancy.published_at.desc(), TopVacancy.id)
+    if summary:
+        # Transient view objects preserve the shared dedup/favorite rules. Only
+        # uncertain approvals need description bytes for context verification.
+        rows = []
+        for entry in db.execute(query).mappings():
+            data = {key: entry["data_" + key] for key in fields if entry["data_" + key] is not None}
+            if entry["recommendable"] is not None:
+                data["explanation"] = {"recommendable": entry["recommendable"]}
+            if data.get("eligibility") == "unknown":
+                data["description"] = entry["description"]
+            rows.append(TopVacancy(**{column.name: entry[column.name] for column in metadata}, data=data))
+    else:
+        rows = list(db.scalars(query))
     unique: dict[tuple[str, ...], TopVacancy] = {}
     seen_urls: set[tuple[str, str, str]] = set()
     for row in rows:
@@ -112,7 +134,7 @@ def top_vacancies(offset: int = Query(default=0, ge=0), limit: int = Query(defau
                   provider: Literal["", "linkedin"] = "",
                   favorites: bool = False,
                   db: Session = Depends(session)) -> dict[str, Any]:
-    rows = top_rows(db, provider, favorites=favorites)
+    rows = top_rows(db, provider, favorites=favorites, summary=True)
     fields = ("company", "title", "location", "salary", "provider", "canonical_url", "published_at", "publication_label", "eligibility", "review_status")
     return {"window_hours": WINDOW_HOURS, "min_score": MIN_SCORE, "total": len(rows),
             "items": [{**{key: row.data.get(key) for key in fields}, "id": row.id, "score": row.score,

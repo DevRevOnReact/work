@@ -92,6 +92,21 @@ def test_pg_migrations_audit_and_concurrent_claim(monkeypatch):
             assert db.get(Resume, resume.id).sha256 == "f" * 64
             assert db.get(ResumeFile, replacement.id).content == content
             assert db.get(Candidate, 1).facts["search_locations"] == ["Serbia", "Georgia"]
+            # Exercise the JSON projections on actual PostgreSQL as well as SQLite.
+            from jobpilot.top_vacancies import save_top_vacancies, top_rows
+            from jobpilot.vacancy_review import context_hash
+            from jobpilot.models import now
+            posting = {**vacancy().model_dump(mode="json"), "score": 90, "eligibility": "eligible",
+                       "published_at": now().isoformat(), "description": "Large public description " * 1000}
+            save_top_vacancies(db, db.scalar(select(SavedSearch)), [posting])
+            db.commit()
+            projected = top_rows(db, summary=True)
+            assert len(projected) == 1 and "description" not in projected[0].data
+            before = context_hash(db, posting)
+            candidate = db.get(Candidate, 1)
+            candidate.facts = {**candidate.facts, "resume_text": "Large CV " * 10000}
+            db.commit()
+            assert context_hash(db, posting) == before
     finally:
         engine.dispose()
         with admin.begin() as c:

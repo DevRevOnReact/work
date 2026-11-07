@@ -47,6 +47,46 @@ def test_top_window_threshold_order_and_best_resume_dedup(db, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_top_summary_projects_only_needed_database_fields_and_keeps_approval_rules(db):
+    import json
+    from sqlalchemy import event
+    from jobpilot.models import Candidate, VacancyReview
+    from jobpilot.vacancy_identity import identity
+    from jobpilot.vacancy_review import context_hash, url_hash
+    value = search(db)
+    candidate = db.get(Candidate, 1)
+    candidate.facts = {**candidate.facts, "resume_text": "large private CV " * 10000}
+    known = dict(job("https://example.com/known"), description="Long employer description " * 10000)
+    uncertain = dict(job("https://example.com/uncertain"), title="Backend Engineer",
+                     eligibility="unknown", review_status="approved", description="Verified current conditions")
+    db.add(VacancyReview(url_hash=url_hash(uncertain["canonical_url"]), identity_key=identity(uncertain),
+        context_hash=context_hash(db, uncertain), search_id=value.id, data=uncertain, status="approved"))
+    top_vacancies.save_top_vacancies(db, value, [known, uncertain])
+    db.commit()
+    full = top_vacancies.top_rows(db)
+    statements = []
+
+    def capture(state):
+        statements.append(state.statement)
+
+    event.listen(db, "do_orm_execute", capture)
+    try:
+        preview = top_vacancies.top_rows(db, summary=True)
+    finally:
+        event.remove(db, "do_orm_execute", capture)
+    assert [row.id for row in full] == [row.id for row in preview]
+    projected = next(row for row in preview if row.data["canonical_url"] == known["canonical_url"])
+    assert "description" not in projected.data
+    assert len(json.dumps(projected.data)) < len(json.dumps(known)) // 20
+    assert not any(getattr(column, "name", "") in {"data", "facts"}
+                   and getattr(getattr(column, "table", None), "name", "") in {"top_vacancies", "candidates", "vacancy_reviews"}
+                   for statement in statements for column in getattr(statement, "selected_columns", []))
+    # The thin view must still revoke an approval immediately after profile edits.
+    candidate.facts = {**candidate.facts, "location": "Different location"}
+    db.commit()
+    assert [row.data["canonical_url"] for row in top_vacancies.top_rows(db, summary=True)] == [known["canonical_url"]]
+
+
 def test_each_qualifying_job_is_queued_once_globally_without_truncating_urls(db, monkeypatch):
     enable(monkeypatch)
     first, second = search(db), search(db)

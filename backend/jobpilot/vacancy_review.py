@@ -18,11 +18,14 @@ def url_hash(url: str) -> str:
 
 
 def context_hash(db: Session, job: dict[str, Any]) -> str:
-    candidate = db.get(Candidate, 1)
-    facts = candidate.facts if candidate else {}
+    # This check runs for many cards and notifications. Fetch only eligibility
+    # preferences, never all cached CV text in Candidate.facts.
+    keys = ("location", "search_locations", "work_authorization")
+    facts: dict[str, Any] = dict(db.execute(select(*(Candidate.facts[key].label(key) for key in keys))
+                       .where(Candidate.id == 1)).mappings().first() or {})
     context = {"url": job.get("canonical_url"), "location": job.get("location"),
                "description": job.get("description"),
-               "profile": {key: facts.get(key) for key in ("location", "search_locations", "work_authorization")}}
+               "profile": {key: facts.get(key) for key in keys}}
     return hashlib.sha256(json.dumps(context, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -44,7 +47,10 @@ def matching_reviews(db: Session, job: dict[str, Any]) -> list[VacancyReview]:
 
 
 def is_rejected(db: Session, job: dict[str, Any]) -> bool:
-    return any(row.status == "rejected" for row in matching_reviews(db, job))
+    rows = db.execute(select(*(VacancyReview.data[key].label(key) for key in ("canonical_url", "company", "title")))
+        .where(VacancyReview.status == "rejected", (VacancyReview.identity_key == identity(job)) |
+               (VacancyReview.url_hash == url_hash(job.get("canonical_url", ""))) | (VacancyReview.identity_key == "")))
+    return any(same_vacancy(dict(row), job) for row in rows.mappings())
 
 
 def approved_for_preparation(db: Session, job: dict[str, Any]) -> bool:
@@ -180,7 +186,8 @@ def backfill_saved_reviews(db: Session) -> None:
 def is_approved(db: Session, job: dict[str, Any]) -> bool:
     if job.get("eligibility") != "unknown" or job.get("review_status") != "approved":
         return False
-    review = db.scalar(select(VacancyReview).where(VacancyReview.url_hash == url_hash(job.get("canonical_url", ""))))
+    review = db.execute(select(VacancyReview.status, VacancyReview.context_hash)
+        .where(VacancyReview.url_hash == url_hash(job.get("canonical_url", "")))).first()
     return bool(review and review.status == "approved" and review.context_hash == context_hash(db, job))
 
 

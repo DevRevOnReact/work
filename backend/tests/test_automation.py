@@ -839,6 +839,30 @@ def test_attempted_aliases_are_skipped_before_reading_resumes(db, workspace, mon
     assert db.scalar(select(func.count()).select_from(Application)) == 1
 
 
+def test_unchanged_selection_reads_only_revisions_and_profile_changes_invalidate_it(db, workspace, monkeypatch):
+    from jobpilot import domain, tailoring, top_vacancies
+    workspace.control.mode, workspace.control.auto_apply, workspace.control.min_score = "autonomous", True, 80
+    db.commit()
+    record = {**flow.job_input(workspace.job).model_dump(mode="json"), "score": 40}
+    top_calls = MagicMock(return_value=[SimpleNamespace(data=record)])
+    contexts = MagicMock(return_value=[(workspace.resume, workspace.profile)])
+    monkeypatch.setattr(top_vacancies, "top_rows", top_calls)
+    monkeypatch.setattr(tailoring, "resume_contexts", contexts)
+    monkeypatch.setattr(tailoring, "select_resume", lambda *args, **kwargs: (workspace.resume, workspace.profile))
+    monkeypatch.setattr(domain, "evaluate", lambda *args: {"score": 40, "eligibility": "eligible", "recommendable": True})
+    workspace.runtime.select_eligible()
+    workspace.runtime.select_eligible()
+    assert top_calls.call_count == contexts.call_count == 1
+    workspace.candidate.version += 1
+    db.commit()
+    workspace.runtime.select_eligible()
+    assert top_calls.call_count == contexts.call_count == 2
+    workspace.control.min_score = 0
+    db.commit()
+    workspace.runtime.select_eligible()
+    assert db.scalar(select(func.count()).select_from(Application)) == 1
+
+
 async def test_empty_runtime_uses_idle_poll_interval(db, workspace):
     await workspace.runtime.tick()
     assert workspace.runtime.poll_seconds == settings().application_idle_poll_seconds
@@ -886,6 +910,27 @@ def test_answer_route_inherits_authentication_and_summary_omits_full_answers(db,
     finally:
         client.close()
         api.app.dependency_overrides.clear()
+
+
+def test_application_detail_redaction_does_not_download_cached_resume_facts(db, workspace):
+    from sqlalchemy import event
+    workspace.candidate.facts = {**workspace.candidate.facts, "resume_text": "Large private CV " * 10000}
+    app = stopped_form(db, workspace)
+    statements = []
+
+    def capture(state):
+        statements.append(state.statement)
+
+    event.listen(db, "do_orm_execute", capture)
+    try:
+        result = flow.detail(db, app)
+    finally:
+        event.remove(db, "do_orm_execute", capture)
+    assert len(result["answer_fields"]) == 2
+    assert "resume_text" not in flow.contact_facts(db)
+    assert not any(getattr(column, "name", "") == "facts"
+                   and getattr(getattr(column, "table", None), "name", "") == "candidates"
+                   for statement in statements for column in getattr(statement, "selected_columns", []))
 
 
 async def test_waiting_application_cannot_starve_queue(db, workspace, monkeypatch):
