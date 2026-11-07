@@ -189,11 +189,14 @@ def decide(db: Session, review_id: str, message_id: str, decision: str) -> tuple
     notification = db.get(SearchNotification, review.notification_id) if review and review.notification_id else None
     if not review or not notification or notification.provider_message_id != message_id:
         return "Эта кнопка больше не действует.", None
-    if review.status != "pending":
+    if review.status not in {"pending", "top_pending"}:
         return "Решение по вакансии уже сохранено.", notification
+    was_top = review.status == "top_pending"
+    if was_top and decision != "rejected":
+        return "Неизвестное действие.", None
     if is_rejected(db, review.data):
         return "Эта вакансия уже отклонена.", notification
-    if (review.context_hash != context_hash(db, review.data) or not eligible_for_review(review.data)
+    if (review.context_hash != context_hash(db, review.data) or (not was_top and not eligible_for_review(review.data))
             or db.get(SavedSearch, review.search_id) is None):
         return "Данные изменились или вакансия устарела. Дождитесь обновления поиска.", None
     if decision not in {"approved", "rejected"}:
@@ -244,4 +247,4 @@ def decide(db: Session, review_id: str, message_id: str, decision: str) -> tuple
             search.result_count = max(0, search.result_count - (len(previous) - len(updated)))
     audit(db, "vacancy_review", {"review_id": review.id, "decision": decision, "actor": "telegram"})
     return ("Добавлено в подборку. Отклик не отправлен." if decision == "approved"
-            else "Вакансия отклонена."), notification
+            else "Вакансия отклонена. Ответьте на эту карточку: почему она вам не подходит?"), notification

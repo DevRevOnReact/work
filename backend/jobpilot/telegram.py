@@ -44,7 +44,7 @@ def poll_commands() -> None:
                     queued = db.get(SearchNotification, review.notification_id) if review and review.notification_id else None
                     # Delivery commits its receipt after the batch. Do not consume a real click
                     # that arrived while the send is still in that uncommitted transaction.
-                    if review and review.status == "pending" and queued and queued.status == "pending" and not queued.provider_message_id:
+                    if review and review.status in {"pending", "top_pending"} and queued and queued.status == "pending" and not queued.provider_message_id:
                         break
                     from .vacancy_review import decide
                     result, notification = decide(db, match.group(2), str(message.get("message_id", "")),
@@ -55,7 +55,18 @@ def poll_commands() -> None:
                 continue
             message = item.get("message", {})
             if str(message.get("chat", {}).get("id")) == s.telegram_chat_id:
-                command = message.get("text", "").split("@")[0].strip()
+                raw_text = message.get("text", "").strip()
+                reply_id = str(message.get("reply_to_message", {}).get("message_id", ""))
+                notification = db.scalar(select(SearchNotification).where(
+                    SearchNotification.channel == "telegram", SearchNotification.provider_message_id == reply_id)) if reply_id else None
+                review = db.scalar(select(VacancyReview).where(
+                    VacancyReview.notification_id == notification.id, VacancyReview.status == "rejected")) if notification else None
+                if review and raw_text and not raw_text.startswith("/"):
+                    audit(db, "vacancy_feedback", {"review_id": review.id, "reason": raw_text[:2000], "job": review.data})
+                    db.add(Outbox(message="Спасибо! Причина сохранена. При следующих поисках учитываются замечания о компании и названии должности."))
+                    offset = max(offset, item["update_id"] + 1)
+                    continue
+                command = raw_text.split("@")[0].strip()
                 control = db.get(Control, 1)
                 output = ""
                 if command in {"/pause", "/resume"} and control:

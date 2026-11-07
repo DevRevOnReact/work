@@ -67,7 +67,8 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
                          enqueue_without_credentials: bool = False) -> int:
     if not enqueue_without_credentials and "telegram" not in channels():
         return 0
-    from .vacancy_review import matching_reviews
+    from .vacancy_review import matching_reviews, context_hash, url_hash
+    from .vacancy_identity import identity
     queued = 0
     current = now()
     for job in jobs:
@@ -93,6 +94,9 @@ def enqueue_top_telegram(db: Session, search_id: str, jobs: list[dict[str, Any]]
                                   status="pending" if len(message) <= 4096 else "failed",
                                   expires_at=published + timedelta(hours=72),
                                   error=None if len(message) <= 4096 else "Ссылка превышает лимит сообщения Telegram"))
+        db.add(VacancyReview(id=uid(), url_hash=url_hash(job['canonical_url']), identity_key=identity(job),
+                             context_hash=context_hash(db, job), search_id=search_id, data=job,
+                             status='top_pending', notification_id=key))
         queued += 1
     return queued
 
@@ -240,14 +244,14 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
                         review = db.scalar(select(VacancyReview).where(VacancyReview.notification_id == item.id))
                         if review:
                             from .vacancy_review import context_hash, eligible_for_review
-                            if (review.status != "pending" or review.context_hash != context_hash(db, review.data)
-                                    or not eligible_for_review(review.data)):
+                            if (review.status not in {"pending", "top_pending"} or review.context_hash != context_hash(db, review.data)
+                                    or (review.status == "pending" and not eligible_for_review(review.data))):
                                 item.status = "superseded"
                                 continue
-                            payload["reply_markup"] = {"inline_keyboard": [[
-                                {"text": "✅ Подтвердить", "callback_data": f"vr:a:{review.id}"},
-                                {"text": "❌ Отклонить", "callback_data": f"vr:r:{review.id}"},
-                            ]]}
+                            buttons = [{"text": "❌ Отклонить", "callback_data": f"vr:r:{review.id}"}]
+                            if review.status == "pending":
+                                buttons.insert(0, {"text": "✅ Подтвердить", "callback_data": f"vr:a:{review.id}"})
+                            payload["reply_markup"] = {"inline_keyboard": [buttons]}
                         response = client.post(
                             f"https://api.telegram.org/bot{config.telegram_bot_token.get_secret_value()}/sendMessage",
                             json=payload)
