@@ -50,6 +50,16 @@ def deliver_review(db, monkeypatch, review):
     return sent
 
 
+def test_queued_card_respects_changed_remote_filter(db, monkeypatch, review_setup):
+    search, _, job, review = review_setup
+    review.data = {**job, "location": "OnSite · Berlin"}
+    review.context_hash = vacancy_review.context_hash(db, review.data)
+    search.filters = {"work_mode": "remote"}
+    db.commit()
+    assert deliver_review(db, monkeypatch, review) == []
+    assert db.get(SearchNotification, review.notification_id).status == "superseded"
+
+
 def poll(monkeypatch, updates):
     requests = []
     def get(url, **kwargs):
@@ -144,6 +154,22 @@ def test_top_rejection_and_reply_save_feedback(db, monkeypatch, review_setup):
     feedback = db.scalar(select(Audit).where(Audit.kind == "vacancy_feedback"))
     assert feedback.detail["review_id"] == review.id
     assert feedback.detail["reason"] == "Не подходит должность"
+
+
+def test_rejection_feedback_without_reply_target_is_not_sent_to_assistant(db, monkeypatch, review_setup):
+    search, _, job, initial_review = review_setup
+    db.get(SearchNotification, initial_review.notification_id).status = "superseded"
+    job = {**job, "canonical_url": "https://example.com/other", "title": "Another role", "eligibility": "eligible"}
+    assert notifications.enqueue_top_telegram(db, search.id, [job]) == 1
+    db.commit()
+    review = db.scalar(select(VacancyReview).where(VacancyReview.status == "top_pending"))
+    deliver_review(db, monkeypatch, review)
+    poll(monkeypatch, [callback(review, action="r")])
+    monkeypatch.setattr(telegram, "bot_request", lambda *args: pytest.fail("feedback reached assistant"))
+    poll(monkeypatch, [{"update_id": 2, "message": {"chat": {"id": "123", "type": "private"},
+        "from": {"id": "123"}, "text": "Не подходит должность"}}])
+    feedback = db.scalar(select(Audit).where(Audit.kind == "vacancy_feedback"))
+    assert feedback.detail["review_id"] == review.id
 
 
 def test_stale_profile_and_expired_or_changed_search_cannot_be_approved(db, monkeypatch, review_setup):

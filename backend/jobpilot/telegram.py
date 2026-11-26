@@ -6,7 +6,18 @@ from sqlalchemy import func, select, text
 
 from .config import settings
 from .db import SessionLocal
-from .models import Application, Audit, Control, Job, Outbox, SearchNotification, VacancyReview, now
+from .models import (
+    Application,
+    Audit,
+    Control,
+    Job,
+    Outbox,
+    ReplyDraft,
+    SearchNotification,
+    VacancyReview,
+    now,
+)
+from .reply_runtime import BOT_HELP, bot_request
 from .services import MINIMUM_QUALIFICATION_SCORE, audit
 
 
@@ -56,12 +67,30 @@ def poll_commands() -> None:
             message = item.get("message", {})
             if str(message.get("chat", {}).get("id")) == s.telegram_chat_id:
                 raw_text = message.get("text", "").strip()
+                forwarded = bool(message.get("forward_origin") or message.get("forward_date"))
+                owner = (message.get("chat", {}).get("type") == "private"
+                         and str(message.get("from", {}).get("id")) == s.telegram_chat_id)
                 reply_id = str(message.get("reply_to_message", {}).get("message_id", ""))
                 notification = db.scalar(select(SearchNotification).where(
                     SearchNotification.channel == "telegram", SearchNotification.provider_message_id == reply_id)) if reply_id else None
                 review = db.scalar(select(VacancyReview).where(
                     VacancyReview.notification_id == notification.id, VacancyReview.status == "rejected")) if notification else None
-                if review and raw_text and not raw_text.startswith("/"):
+                # Telegram clients do not always preserve the reply target when the
+                # user answers the question in a separate message. In that case,
+                # treat an unambiguous delivered rejection as feedback;
+                # otherwise the text is allowed to reach the assistant.
+                if (not review and raw_text and not forwarded and not raw_text.startswith("/")
+                        and not reply_id and owner):
+                    candidates = list(db.scalars(
+                        select(VacancyReview).join(SearchNotification,
+                            VacancyReview.notification_id == SearchNotification.id)
+                        .where(VacancyReview.status == "rejected",
+                               SearchNotification.channel == "telegram",
+                               SearchNotification.status == "sent")
+                        .order_by(VacancyReview.updated_at.desc()).limit(2)))
+                    if len(candidates) == 1:
+                        review = candidates[0]
+                if review and raw_text and not forwarded and not raw_text.startswith("/"):
                     audit(db, "vacancy_feedback", {"review_id": review.id, "reason": raw_text[:2000], "job": review.data})
                     db.add(Outbox(message="Спасибо! Причина сохранена. При следующих поисках учитываются замечания о компании и названии должности."))
                     offset = max(offset, item["update_id"] + 1)
@@ -69,7 +98,12 @@ def poll_commands() -> None:
                 command = raw_text.split("@")[0].strip()
                 control = db.get(Control, 1)
                 output = ""
-                if command in {"/pause", "/resume"} and control:
+                if forwarded or (owner and (command == "/assistant" or raw_text.startswith("/assistant ")
+                                             or message.get("voice") or message.get("photo")
+                                             or (raw_text and not raw_text.startswith("/")))):
+                    if owner:
+                        output = bot_request(db, message, item["update_id"])
+                elif command in {"/pause", "/resume"} and control:
                     control.enabled = command == "/resume"
                     audit(db, "automation_control", {"enabled": control.enabled, "actor": "telegram"})
                     output = (
@@ -141,8 +175,19 @@ def deliver_outbox() -> None:
                                .with_for_update(skip_locked=True).limit(20)):
             payload = {"chat_id": s.telegram_chat_id, "text": item.message[:4000],
                        "disable_web_page_preview": True}
-            if item.message == "Откройте топ вакансий в мини-приложении кнопкой ниже." and s.public_app_url.startswith("https://"):
-                payload["reply_markup"] = {"inline_keyboard": [[{"text": "Открыть топ вакансий", "web_app": {"url": s.public_app_url.rstrip("/") + "/telegram"}}]]}
+            draft = db.get(ReplyDraft, item.id)
+            if draft and (not s.telegram_chat_id.isdecimal() or draft.request.get("recipient") != s.telegram_chat_id):
+                item.status, item.error, item.message = "dead", "AssistantRecipientChanged", "Доставка отменена."
+                continue
+            if s.public_app_url.startswith("https://") and (
+                draft or item.message in {BOT_HELP, "Откройте топ вакансий в мини-приложении кнопкой ниже."}
+            ):
+                base = s.public_app_url.rstrip("/") + "/telegram"
+                buttons = []
+                if item.message.startswith("Откройте топ"):
+                    buttons.append([{"text": "Открыть топ вакансий", "web_app": {"url": base}}])
+                buttons.append([{"text": "Помощник", "web_app": {"url": base + "?view=assistant"}}])
+                payload["reply_markup"] = {"inline_keyboard": buttons}
             try:
                 response = httpx.post(
                     f"https://api.telegram.org/bot{s.telegram_bot_token.get_secret_value()}/sendMessage",
@@ -151,6 +196,8 @@ def deliver_outbox() -> None:
                 if not response.json().get("ok"):
                     raise ValueError("Telegram rejected message")
                 item.status, item.error = "sent", None
+                if draft:
+                    item.message = "Ответ доставлен."
             except (httpx.HTTPError, ValueError, TypeError) as exc:
                 item.attempts += 1
                 item.error = type(exc).__name__
