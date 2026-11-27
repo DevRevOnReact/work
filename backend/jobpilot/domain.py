@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-MATCHING_VERSION = "matching-v2.3"
+MATCHING_VERSION = "matching-v2.4"
 
 class Profile(BaseModel):
     full_name: str | None = None

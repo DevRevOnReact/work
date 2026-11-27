@@ -141,9 +141,9 @@ def evaluate_match(job: JobInput, profile: Profile, at: datetime | None = None) 
     required = set().union(*(_detected(part, vocabulary) for part, optional in segments if not optional))
     optional_skills = set().union(*(_detected(part, vocabulary) for part, optional in segments if optional)) - required
     actual = _detected(resume, vocabulary)
+    from .resumes import _recognized
     for skill in list(actual):
-        if any(re.search(r"(?:no experience (?:with|in)|нет опыта (?:с|в))\s+" + re.escape(alias) + r"(?!\w)", resume, re.I)
-               for alias in vocabulary[skill]):
+        if not _recognized(resume, tuple(vocabulary[skill])):
             actual.discard(skill)
     # Treat explicit alternatives as one requirement, rather than requiring both.
     alternatives: list[set[str]] = []
