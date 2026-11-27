@@ -1,5 +1,5 @@
 {
-  "dataset": "Synthetic expert-authored fixtures, 6 extraction cases, 3 resumes x 12 vacancies",
+  "dataset": "Manually specified synthetic fixtures, 6 extraction cases, 3 resumes x 12 vacancies",
   "limitations": "Fixture results do not estimate real-world precision. Production evaluation needs owner-labelled relevant and irrelevant vacancies.",
   "extraction": {
     "skill_precision": 1.0,
@@ -158,13 +158,13 @@
       "resume": "Full Stack Engineer",
       "baseline": {
         "precision_at_3": 1.0,
-        "recall_at_3": 0.3333,
+        "recall_at_3": 0.4286,
         "ndcg_at_3": 0.4949,
         "returned": 7
       },
       "hybrid": {
         "precision_at_3": 1.0,
-        "recall_at_3": 0.3333,
+        "recall_at_3": 0.4286,
         "ndcg_at_3": 1.0,
         "returned": 7
       },

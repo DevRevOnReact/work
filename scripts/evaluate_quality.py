@@ -23,9 +23,9 @@ ROLES = [
     ("Full Stack Engineer", "React TypeScript Python FastAPI PostgreSQL API components"),
 ]
 JOBS = [
-    ("React UI Engineer", "Requirements: React TypeScript CSS. Build accessible components and optimize rendering performance.", [3,0,2]),
+    ("React UI Engineer", "Requirements: React TypeScript CSS. Build accessible components and optimize rendering performance.", [3,0,0]),
     ("Frontend Developer", "Requirements: React TypeScript. Build reusable components and responsive interfaces.", [3,0,2]),
-    ("Web Engineer", "Requirements: React CSS. Deliver responsive components and test interfaces.", [2,0,1]),
+    ("Web Engineer", "Requirements: React CSS. Deliver responsive components and test interfaces.", [2,0,0]),
     ("Python Backend Engineer", "Requirements: Python FastAPI PostgreSQL. Build APIs and optimize database queries.", [0,3,2]),
     ("Backend Developer", "Requirements: Python PostgreSQL. Build tested API integrations.", [0,3,2]),
     ("API Engineer", "Requirements: Python FastAPI. Implement APIs and database integrations.", [0,2,2]),
@@ -80,7 +80,7 @@ def measure() -> dict:
                           "top": [{"title": jobs[i].title, "score": results[i]["score"], "gold_grade": relevance[i]} for i in ranked[:3]]})
     text = "\n".join(["Built React components."] * 40 + ["Reduced dashboard rendering latency by 37% using virtualization."])
     evidence = source_facts(Profile(resume_text=text, skills=["React"]), "dashboard rendering latency virtualization")
-    return {"dataset": "Synthetic expert-authored fixtures, 6 extraction cases, 3 resumes x 12 vacancies",
+    return {"dataset": "Manually specified synthetic fixtures, 6 extraction cases, 3 resumes x 12 vacancies",
             "limitations": "Fixture results do not estimate real-world precision. Production evaluation needs owner-labelled relevant and irrelevant vacancies.",
             "extraction": {"skill_precision": correct / predicted if predicted else 0,
                            "skill_recall": correct / expected if expected else 0, "years_exact_match": years_correct / len(CASES),
