@@ -100,7 +100,8 @@ def deploy(sha: str) -> None:
         return
     release = stage(sha)
     environment = {**os.environ, "JOBPILOT_COMMIT": sha}
-    command(["docker", "image", "tag", "jobpilot-vps-app:latest", "jobpilot-vps-app:rollback"])
+    running_image = command(["docker", "inspect", "--format", "{{.Image}}", "jobpilot-vps-app-1"])
+    command(["docker", "image", "tag", running_image, "jobpilot-vps-app:rollback"])
     print("Building " + sha, flush=True)
     compose(release, environment, "build", "app")
     if not idle():
