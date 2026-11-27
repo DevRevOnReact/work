@@ -1,7 +1,8 @@
 "use client";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Building2, FileText, Search, Trophy } from "lucide-react";
+import { Building2, FileText, MessageSquareText, Search, Trophy } from "lucide-react";
+import { ReplyAssistant } from "./reply-assistant";
 import { useWorkspace } from "@/hooks/use-workspace";
 import type { PageName } from "@/lib/types";
 import { SearchesView } from "./searches-view";
@@ -11,6 +12,7 @@ import { TopVacanciesView } from "./top-vacancies-view";
 import { ApplicationPanel } from "./application-panel";
 
 const pages = [
+  {key: "assistant" as PageName, label: "Помощник", icon: MessageSquareText, description: "Ответьте рекрутеру и подберите резюме для разговора."},
   {key: "search" as PageName, label: "Поиски", icon: Search, description: "Работа, которая подходит вашему опыту."},
   {key: "top" as PageName, label: "Топ за 3 дня", icon: Trophy, description: "Вакансии за последние 72 часа с соответствием резюме от 60/100."},
   {key: "companies" as PageName, label: "Компании", icon: Building2, description: "Новые работодатели и люди, с которыми можно познакомиться."},
@@ -32,6 +34,7 @@ function Workspace({initialPage, initialApplication}: {initialPage: PageName; in
         {state.error || state.searches.error?.message || state.resumes.error?.message}</div>}
       {application ? <><ApplicationPanel applicationId={application}/><button className="text-button" onClick={() => setApplication(null)}>Вернуться к поискам</button></> : <>
         {state.page === "search" && <SearchesView state={state}/>}
+        {state.page === "assistant" && <ReplyAssistant/>}
         {state.page === "top" && <TopVacanciesView state={state}/>}
         {state.page === "companies" && <CompaniesView state={state}/>}
         {state.page === "resumes" && <ResumesView state={state}/>}

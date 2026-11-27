@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .domain import JobInput, Profile, evaluate
+from .domain import SKILL_ALIASES, JobInput, Profile, evaluate
 from .models import Candidate, Resume, SavedSearch
+from .workplace import classify
 
 
 class SearchFilters(BaseModel):
@@ -49,15 +50,14 @@ def search_profile(db: Session, resume_id: str) -> Profile:
         raise ValueError("Текст резюме недоступен; загрузите файл повторно")
     # Keep separately entered location and authorization, but use only the chosen
     # document's extracted experience and skills, never the active document's.
-    from .resumes import extract_facts
-    parsed_facts = record.get("facts")
-    if not isinstance(parsed_facts, dict):
-        parsed_facts, _ = extract_facts(record["text"])
+    from .resumes import verified_resume
+    parsed = verified_resume(db, resume, candidate.facts.get("resumes", {}))
+    parsed_facts = parsed.facts
     facts = {**candidate.facts, **parsed_facts,
              "location": candidate.facts.get("location", "") or parsed_facts.get("location", ""),
              "active_resume_id": resume_id,
-             "resume_text": record["text"], "resume_filename": resume.filename,
-             "resume_parse_warnings": record.get("warnings", []),
+             "resume_text": parsed.text, "resume_filename": resume.filename,
+             "resume_parse_warnings": parsed.warnings,
              "search_locations": candidate.facts.get("search_locations", [])}
     return Profile.model_validate(facts)
 
@@ -67,31 +67,21 @@ def phrases(value: str) -> list[str]:
 
 
 def skill_present(skill: str, text: str) -> bool:
-    return bool(re.search(r"(?<!\w)" + re.escape(skill) + r"(?!\w)", text))
+    aliases = next((aliases for name, aliases in SKILL_ALIASES.items() if name.casefold() == skill.casefold()), (skill,))
+    return any(re.search(r"(?<![\w+#])" + re.escape(alias) + r"(?![\w+#])", text, re.I) for alias in aliases)
 
 
 def work_mode(job: JobInput) -> str:
-    location = job.location.casefold()
-    # Mixed remote/hybrid locations should not silently become fully remote.
-    for mode, terms in (("hybrid", ("hybrid", "гибрид")),
-                        ("onsite", ("onsite", "on-site", "in office", "офис")),
-                        ("remote", ("remote", "удален", "удалён"))):
-        if any(term in location for term in terms):
-            return mode
-    description = job.description.casefold()
-    for mode, description_terms in (("hybrid", ("this role is hybrid",)),
-                        ("onsite", ("this role is onsite", "this role is on-site")),
-                        ("remote", ("fully remote", "100% remote", "this role is remote"))):
-        if any(term in description for term in description_terms):
-            return mode
-    return ""
+    return classify(job.location, job.description, job.title)
 
 
-def matches(job: JobInput, filters: SearchFilters, result: dict[str, Any] | None = None) -> bool:
+def matches(job: JobInput, filters: SearchFilters, result: dict[str, Any] | None = None, *,
+            at: datetime | None = None) -> bool:
     title = job.title.casefold()
     text = (job.title + " " + job.description).casefold()
     location = job.location.casefold()
-    if phrases(filters.title) and not any(term in title for term in phrases(filters.title)):
+    if phrases(filters.title) and not any(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", title)
+                                         for term in phrases(filters.title)):
         return False
     words = filters.keywords.casefold().split()
     if words and not (all if filters.keywords_mode == "all" else any)(word in text for word in words):
@@ -118,12 +108,14 @@ def matches(job: JobInput, filters: SearchFilters, result: dict[str, Any] | None
     if filters.work_mode:
         if work_mode(job) != filters.work_mode:
             return False
-    if filters.posted_days:
-        if not job.published_at:
-            return False
+    if job.published_at:
+        current = at or datetime.now(UTC)
+        current = current.replace(tzinfo=UTC) if current.tzinfo is None else current
         published = job.published_at.replace(tzinfo=UTC) if job.published_at.tzinfo is None else job.published_at
-        if published < datetime.now(UTC) - timedelta(days=filters.posted_days):
+        if published > current or (filters.posted_days and published < current - timedelta(days=filters.posted_days)):
             return False
+    elif filters.posted_days:
+        return False
     return result is None or ((filters.eligibility == "rejected" or
                               (result.get("recommendable", True) and result["eligibility"] != "rejected")) and
                              result["score"] >= filters.min_score and
@@ -161,10 +153,10 @@ def make_results(db: Session, search: SavedSearch, jobs: list[JobInput], *,
         if job.canonical_url in seen:
             continue
         seen.add(job.canonical_url)
-        if not matches(job, filters):
+        if not matches(job, filters, at=at):
             continue
         result = adjust(job, evaluate(job, profile), feedback_rules)
-        if matches(job, filters, result):
+        if matches(job, filters, result, at=at):
             results.append({**job.model_dump(mode="json"), "score": result["score"],
                             "eligibility": result["eligibility"], "explanation": result})
     if filters.sort == "newest":
@@ -172,5 +164,6 @@ def make_results(db: Session, search: SavedSearch, jobs: list[JobInput], *,
     elif filters.sort == "company":
         results.sort(key=lambda item: (item["company"].casefold(), -item["score"], item["canonical_url"]))
     else:
-        results.sort(key=lambda item: (-item["score"], item["company"].casefold(), item["title"].casefold()))
+        from .retrieval import rank_candidates
+        rank_candidates(results, profile)
     return results[:limit] if limit is not None else results, len(results)

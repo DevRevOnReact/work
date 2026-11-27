@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy JobPilot revision verified by GitHub Actions
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/danil/apps/jobpilot
+ExecStart=/usr/bin/python3 /home/danil/apps/jobpilot/scripts/deploy_verified.py
+TimeoutStartSec=1800
+UMask=0077

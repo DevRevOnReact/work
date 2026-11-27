@@ -16,7 +16,9 @@ def resume_filters(resume: Resume, record: dict[str, Any]) -> SearchFilters:
     headline = " ".join(text.splitlines()[:12]).casefold()
     variant = resume.variant
     title = ""
-    if variant in {"full-stack", "react-python-ai"} or re.search(r"full[ -]?stack", headline):
+    if re.search(r"\b(?:ai[/ -]ml|applied ai|ai engineer|ml engineer|llm|machine learning)\b", headline):
+        title = "AI, ML, Machine Learning, LLM, Applied, Software Engineer, Product Engineer, Backend, Full Stack, Full-stack, Fullstack"
+    elif variant in {"full-stack", "react-python-ai"} or re.search(r"full[ -]?stack", headline):
         title = "Full Stack, Fullstack, Full-stack, Software Engineer, Product Engineer"
         if "Python" in record.get("facts", {}).get("skills", []):
             title += ", Backend, Back-end, Back end"
@@ -26,7 +28,7 @@ def resume_filters(resume: Resume, record: dict[str, Any]) -> SearchFilters:
         title = "Backend, Back-end, Back end"
     # Skills are alternatives: requiring every skill in a CV hides good roles.
     skills = ", ".join(record.get("facts", {}).get("skills", []))[:300]
-    return SearchFilters(title=title, skills=skills, skills_mode="any")
+    return SearchFilters(title=title, skills=skills, skills_mode="any", work_mode="remote", posted_days=7)
 
 
 def ensure_resume_searches(db: Session) -> int:
@@ -42,13 +44,11 @@ def ensure_resume_searches(db: Session) -> int:
             continue  # Retained historical artifacts must not recreate an automatic search.
         if resume.id not in existing and not record.get("text"):
             # Rehydrate pre-search uploads from their stored artifact, without activating them.
-            from .config import settings
             from .resumes import MAX_UPLOAD_BYTES, parse_resume
-            path = settings().data_dir / "resumes" / resume.storage_key
+            from .resume_storage import read_file
             try:
-                with path.open("rb") as stream:
-                    content = stream.read(MAX_UPLOAD_BYTES + 1)
-                if hashlib.sha256(content).hexdigest() == resume.sha256:
+                content = read_file(db, resume)
+                if len(content) <= MAX_UPLOAD_BYTES and hashlib.sha256(content).hexdigest() == resume.sha256:
                     parsed = parse_resume(content, resume.filename)
                     record = {"text": parsed.text, "facts": parsed.facts, "warnings": parsed.warnings}
                     records[resume.id] = record

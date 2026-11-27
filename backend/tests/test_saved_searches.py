@@ -11,9 +11,15 @@ from jobpilot import workers
 
 
 def setup_resumes(db):
-    first = Resume(variant="general", filename="python.txt", storage_key="p.txt", sha256="a" * 64)
-    second = Resume(variant="general", filename="react.txt", storage_key="r.txt", sha256="b" * 64)
+    import hashlib
+    from jobpilot.models import ResumeFile
+    texts = ["Python backend engineer", "React frontend engineer"]
+    first = Resume(variant="general", filename="python.txt", storage_key="p.txt", sha256=hashlib.sha256(texts[0].encode()).hexdigest())
+    second = Resume(variant="general", filename="react.txt", storage_key="r.txt", sha256=hashlib.sha256(texts[1].encode()).hexdigest())
     db.add_all([first, second]); db.flush()
+    settings().store_resume_files_in_db = True
+    db.add_all([ResumeFile(resume_id=first.id, content=texts[0].encode()),
+                ResumeFile(resume_id=second.id, content=texts[1].encode())])
     candidate = db.get(Candidate, 1)
     candidate.facts = {**candidate.facts, "location": "Berlin", "resumes": {
         first.id: {"text": "Python backend engineer", "facts": {"skills": ["Python"], "location": ""}},

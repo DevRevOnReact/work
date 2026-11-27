@@ -146,5 +146,20 @@ textarea:focus-visible { outline:3px solid #b0a0ed; outline-offset:3px; }
 .automation-settings details label:not(.check-label) { margin-top: 14px; }
 .favorite-button { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; flex-shrink:0; }
 .favorite-button.is-favorite { color:#b42360; background:#fff0f5; border-color:#efbdd0; }
+.mini-nav,.mini-assistant { max-width:720px; margin:auto; }
+.mini-nav { display:flex; gap:8px; padding:12px; }
+.mini-nav a { padding:8px 14px; border-radius:8px; }
+.mini-nav a[aria-current=page] { background:var(--purple-light); font-weight:600; }
+.mini-assistant { padding:8px 12px 32px; }
+.reply-assistant { max-width:820px; overflow-wrap:anywhere; }
+.reply-assistant label { font-size:14px; margin-bottom:12px; }
+.reply-assistant textarea,.reply-assistant select { font-size:16px; }
+.reply-assistant .button { min-height:44px; display:inline-flex; gap:8px; align-items:center; }
+.reply-assistant .capture { margin:0 0 18px; }
+.reply-assistant .capture select { width:auto; max-width:100%; }
+.original-question { white-space:pre-wrap; max-height:9em; overflow:auto; }
+.draft-row { border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; justify-content:space-between; padding:10px 0; }
+.draft-row > button:first-child { min-width:0; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.draft-row > button[aria-pressed=true] { font-weight:650; }
 .application-answers > li { padding:10px 0; border-top:1px solid var(--border); }
 .application-answers > li p { white-space:pre-wrap; }

@@ -1,0 +1,378 @@
+{
+  "measured_at": "2026-11-27T01:10:19.603596+00:00",
+  "method": "deployed generate + native Ollama counters",
+  "cases": [
+    {
+      "id": "en_short",
+      "title": "English short question",
+      "input": {
+        "question": "Can you describe your experience building frontend applications with React and TypeScript?"
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 2598,
+        "fact_count": 5,
+        "policy": false,
+        "resume_variant": "frontend"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:11:09.895605431Z",
+          "done": true,
+          "done_reason": "length",
+          "total_duration": 49897281055,
+          "load_duration": 7141123660,
+          "prompt_eval_count": 818,
+          "prompt_eval_duration": 16835860000,
+          "eval_count": 280,
+          "eval_duration": 25906842000,
+          "prompt_eval_cached_count": 0
+        }
+      ],
+      "prompt_chars": 3788,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "5580d829c4e3162d39a35b55e8afb361a588b5d51ba757c23d142d81dde5a15e",
+      "ok": false,
+      "error_type": "AssistantError",
+      "wall_seconds": 50.188,
+      "input_tokens": 818,
+      "output_tokens": 280,
+      "total_tokens": 1098,
+      "done_reason": "length",
+      "generation_tokens_per_second": 10.81
+    },
+    {
+      "id": "ru_short",
+      "title": "Russian short question",
+      "input": {
+        "question": "Расскажите о вашем опыте разработки интерфейсов на React и TypeScript."
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 2598,
+        "fact_count": 5,
+        "policy": false,
+        "resume_variant": "frontend"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:11:38.614064692Z",
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 28431471327,
+          "load_duration": 1282309,
+          "prompt_eval_count": 819,
+          "prompt_eval_duration": 15483381000,
+          "eval_count": 141,
+          "eval_duration": 12810920000,
+          "prompt_eval_cached_count": 0
+        }
+      ],
+      "prompt_chars": 3768,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "979c32fef0ae9c406b2b27bc8fe4c2be114954433aff1b6b083706d4063131d2",
+      "ok": true,
+      "answer_count": 1,
+      "answer_chars": 667,
+      "wall_seconds": 28.694,
+      "input_tokens": 819,
+      "output_tokens": 141,
+      "total_tokens": 960,
+      "done_reason": "stop",
+      "generation_tokens_per_second": 11.01
+    },
+    {
+      "id": "ru_instruction",
+      "title": "Russian with instruction",
+      "input": {
+        "question": "Когда вам удобно обсудить вакансию?",
+        "instruction": "Предложи согласовать время созвона и уточни часовой пояс. Кратко и вежливо."
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 975,
+        "fact_count": 5,
+        "policy": false,
+        "resume_variant": "react-python-ai"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:11:53.79354364Z",
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 14875021339,
+          "load_duration": 1045510,
+          "prompt_eval_count": 496,
+          "prompt_eval_duration": 10140906000,
+          "eval_count": 55,
+          "eval_duration": 4616589000,
+          "prompt_eval_cached_count": 0
+        }
+      ],
+      "prompt_chars": 2186,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "24d8fde36797e028dcd9126712349cbc02f621da228fb0f0c507c2778c7bfd7c",
+      "ok": true,
+      "answer_count": 1,
+      "answer_chars": 225,
+      "wall_seconds": 15.157,
+      "input_tokens": 496,
+      "output_tokens": 55,
+      "total_tokens": 551,
+      "done_reason": "stop",
+      "generation_tokens_per_second": 11.91
+    },
+    {
+      "id": "vacancy",
+      "title": "Question and vacancy context",
+      "input": {
+        "question": "Why are you interested in this frontend role?",
+        "vacancy": "Frontend Engineer. Build accessible web applications with React and TypeScript. Collaborate with designers, review code, improve rendering performance and testing. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. The team values clear communication, maintainable components and practical product decisions. "
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 2598,
+        "fact_count": 5,
+        "policy": false,
+        "resume_variant": "frontend"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:12:24.664758763Z",
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 30606626265,
+          "load_duration": 1074954,
+          "prompt_eval_count": 1007,
+          "prompt_eval_duration": 19604916000,
+          "eval_count": 129,
+          "eval_duration": 10926134000,
+          "prompt_eval_cached_count": 0
+        }
+      ],
+      "prompt_chars": 5034,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "409d454f50a06e503f180b11b2a8abc4d47650286486129ce4d567f08cca092f",
+      "ok": true,
+      "answer_count": 1,
+      "answer_chars": 665,
+      "wall_seconds": 30.845,
+      "input_tokens": 1007,
+      "output_tokens": 129,
+      "total_tokens": 1136,
+      "done_reason": "stop",
+      "generation_tokens_per_second": 11.81
+    },
+    {
+      "id": "ocr",
+      "title": "OCR screenshot and reply",
+      "input": {
+        "question": "Please confirm your interview time."
+      },
+      "repetition": 1,
+      "ocr": {
+        "seconds": 0.307,
+        "bytes": 6461,
+        "chars": 35,
+        "llm_tokens": 0
+      },
+      "context": {
+        "fact_chars": 1973,
+        "fact_count": 4,
+        "policy": false,
+        "resume_variant": "react-python-ai"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:12:39.770899739Z",
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 14513557476,
+          "load_duration": 1036836,
+          "prompt_eval_count": 641,
+          "prompt_eval_duration": 12052196000,
+          "eval_count": 28,
+          "eval_duration": 2347931000,
+          "prompt_eval_cached_count": 0
+        }
+      ],
+      "prompt_chars": 3096,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "0c344462f3bb745525fbc71abd69480770809308a5979446d3cd72523c656da6",
+      "ok": true,
+      "answer_count": 1,
+      "answer_chars": 108,
+      "wall_seconds": 15.084,
+      "input_tokens": 641,
+      "output_tokens": 28,
+      "total_tokens": 669,
+      "done_reason": "stop",
+      "generation_tokens_per_second": 11.93
+    },
+    {
+      "id": "en_repeat",
+      "title": "Repeat first input, direct model measurement",
+      "input": {
+        "question": "Can you describe your experience building frontend applications with React and TypeScript?"
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 2598,
+        "fact_count": 5,
+        "policy": false,
+        "resume_variant": "frontend"
+      },
+      "calls": [
+        {
+          "model": "gemma3:4b",
+          "created_at": "2026-11-27T01:13:08.286189986Z",
+          "done": true,
+          "done_reason": "length",
+          "total_duration": 28289637552,
+          "load_duration": 994241,
+          "prompt_eval_count": 818,
+          "prompt_eval_duration": 432766000,
+          "eval_count": 280,
+          "eval_duration": 27746834000,
+          "prompt_eval_cached_count": 813
+        }
+      ],
+      "prompt_chars": 3788,
+      "options": {
+        "num_ctx": 8192,
+        "num_predict": 280,
+        "num_thread": 3,
+        "temperature": 0.3
+      },
+      "request_sha256": "5580d829c4e3162d39a35b55e8afb361a588b5d51ba757c23d142d81dde5a15e",
+      "ok": false,
+      "error_type": "AssistantError",
+      "wall_seconds": 28.493,
+      "input_tokens": 818,
+      "output_tokens": 280,
+      "total_tokens": 1098,
+      "done_reason": "length",
+      "generation_tokens_per_second": 10.09
+    },
+    {
+      "id": "policy",
+      "title": "Legal declaration",
+      "input": {
+        "question": "Can you guarantee visa sponsorship?",
+        "language": "en"
+      },
+      "repetition": 1,
+      "context": {
+        "fact_chars": 1973,
+        "fact_count": 4,
+        "policy": true,
+        "resume_variant": "react-python-ai"
+      },
+      "calls": [],
+      "ok": true,
+      "answer_count": 1,
+      "answer_chars": 67,
+      "wall_seconds": 0.298,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 0,
+      "done_reason": "no_model_call",
+      "generation_tokens_per_second": 0
+    }
+  ],
+  "runtime": {
+    "model_url": "http://assistant-model:11434",
+    "media_url": "http://assistant-media:8090",
+    "ollama_version": {
+      "version": "0.40.18"
+    },
+    "models": {
+      "models": [
+        {
+          "name": "gemma3:4b",
+          "model": "gemma3:4b",
+          "modified_at": "2026-11-26T05:15:01.014488863Z",
+          "size": 3350272403,
+          "digest": "68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7",
+          "details": {
+            "parent_model": "dhiltgen/gemma3:4b-it-q4_K_M-llamacpp",
+            "format": "gguf",
+            "family": "gemma3",
+            "families": [
+              "gemma3",
+              "clip"
+            ],
+            "parameter_size": "3.9B",
+            "quantization_level": "Q4_K_M",
+            "context_length": 131072,
+            "embedding_length": 2560,
+            "runner": "llamacpp"
+          },
+          "capabilities": [
+            "completion",
+            "vision"
+          ]
+        }
+      ]
+    },
+    "source_sha256": {
+      "reply_assistant.py": "34d02fef54ccaae680583c1b9e17c455b5c560acc198ac25047d81477f65fb8d",
+      "reply_runtime.py": "c8e2285459e296d7b82a843ddfced5a7c3a27dbfc84df49937f25a6bef619897"
+    },
+    "loaded": {
+      "models": [
+        {
+          "name": "gemma3:4b",
+          "model": "gemma3:4b",
+          "size": 3053956627,
+          "digest": "68ceab7e468a31c988b44d5a4984a0e21f58c4f7158c6ce29c1804babac38df7",
+          "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "gemma3",
+            "families": [
+              "gemma3",
+              "clip"
+            ],
+            "parameter_size": "3.9B",
+            "quantization_level": "Q4_K_M"
+          },
+          "expires_at": "2026-11-27T01:16:08.286369248Z",
+          "size_vram": 0,
+          "context_length": 8192,
+          "runner": "llamacpp"
+        }
+      ]
+    }
+  }
+}

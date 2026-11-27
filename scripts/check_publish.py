@@ -37,13 +37,17 @@ def main() -> None:
                                       if facts.get(k) and len(str(facts[k])) >= 6)
     for name in paths:
         path = Path(name)
+        if not path.is_file():
+            continue
         if ((path.name.startswith(".env") and path.name != ".env.example")
             or path.suffix.lower() in {".pdf", ".docx", ".db", ".pem", ".key", ".zip"}
             or path.parts[0] in {"data", ".venv", ".test-tmp"}
             or any(part in {"node_modules", ".next", "__pycache__"} for part in path.parts)):
             failures.append(f"{name}: private file or generated directory")
             continue
-        content = (ROOT / path).read_text(encoding="utf-8")
+        encoding = "latin-1" if name in {"frontend/public/jobpilot-192.png", "frontend/public/jobpilot-512.png",
+                                       "docs/token-architecture-2026-11-27.png"} else "utf-8"
+        content = (ROOT / path).read_text(encoding=encoding)
         if any(value in content for value in secrets):
             failures.append(f"{name}: matches a configured secret")
         if re.search(r"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})", content):

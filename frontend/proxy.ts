@@ -6,7 +6,11 @@ function equal(a: string, b: string) {
 }
 
 export function proxy(request: NextRequest) {
-  if (["/health", "/telegram", "/api/telegram-top"].includes(request.nextUrl.pathname)) return NextResponse.next();
+  const path = request.nextUrl.pathname;
+  if (path === "/api/phone" || path.startsWith("/api/phone/")) return NextResponse.next();
+  if (["/health", "/telegram", "/api/telegram-top", "/api/telegram-assistant", "/manifest.webmanifest",
+       "/jobpilot-192.png", "/jobpilot-512.png"].includes(path) || path.startsWith("/api/telegram-assistant/"))
+    return NextResponse.next();
   const password = process.env.LOGIN_PASSWORD || "";
   const hosted = process.env.HOSTED_MODE === "true";
   if (!password && !hosted) return NextResponse.next();

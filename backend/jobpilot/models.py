@@ -33,6 +33,25 @@ class Candidate(Base):
     version: Mapped[int] = mapped_column(default=1)
 
 
+class AssistantDevice(Base):
+    __tablename__ = "assistant_devices"
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReplyDraft(Base):
+    __tablename__ = "reply_drafts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    source: Mapped[str] = mapped_column(String(12))
+    request: Mapped[dict[str, Any]] = mapped_column(JSON)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    attempts: Mapped[int] = mapped_column(default=0)
+    lease: Mapped[str | None] = mapped_column(String(36))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
 class Resume(Base):
     __tablename__ = "resumes"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

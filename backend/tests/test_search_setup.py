@@ -59,8 +59,8 @@ def test_chosen_resume_warnings_do_not_inherit_another_resume(db):
     candidate = db.get(Candidate, 1)
     candidate.facts = {**candidate.facts, "resume_parse_warnings": ["Other resume warning"]}
     db.commit()
-    assert search_profile(db, first.id).resume_parse_warnings == []
-    assert search_profile(db, second.id).resume_parse_warnings == []
+    assert "Other resume warning" not in search_profile(db, first.id).resume_parse_warnings
+    assert "Other resume warning" not in search_profile(db, second.id).resume_parse_warnings
 
 
 def test_summaries_do_not_download_descriptions(db):

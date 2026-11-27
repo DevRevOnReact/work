@@ -9,7 +9,7 @@ import { SearchProgress } from "./search-progress";
 export function SearchesView({state: s}: {state: WorkspaceState}) {
   return <>
     <section className="panel padded"><div className="panel-heading"><div><h2>Ваши поиски</h2>
-      <p>Автопоиск каждые 3 часа. Только вакансии, опубликованные сегодня по Москве; записи без даты исключаются.</p></div>
+      <p>Автопоиск каждые 3 часа за выбранный период публикации. Топ и уведомления — за последние 72 часа.</p></div>
       <button className="button primary" onClick={() => {s.setSelected(null); s.setEditing(true);}}>Новый поиск</button></div>
       <button className="text-button" disabled={s.pending || !s.resumes.data?.length} onClick={() => void s.action(
         () => api("searches/setup", "POST"), "Поиски для резюме настроены. Существующие параметры сохранены.")}>Настроить поиски для всех резюме</button>

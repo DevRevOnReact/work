@@ -17,7 +17,9 @@ COPY backend/ /app/backend/
 RUN pip install --no-deps --no-cache-dir /app/backend
 COPY --from=web /build/.next/standalone /app/web/
 COPY --from=web /build/.next/static /app/web/.next/static
+COPY --from=web /build/public /app/web/public
 COPY scripts/serve_cloud.py /app/scripts/serve_cloud.py
+COPY scripts/migrate_cloud_data.py /app/scripts/migrate_cloud_data.py
 RUN useradd --create-home --uid 10001 app && mkdir -p /app/data && chown -R app:app /app
 USER app
 ENV PYTHONUNBUFFERED=1 NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production DATA_DIR=/app/data APPLICATION_BROWSER_HEADLESS=true

@@ -145,8 +145,8 @@
     "company": "Epic Games"
   },
   {
-    "provider": "lever",
-    "board": "aircall",
+    "provider": "greenhouse",
+    "board": "aircallioinc",
     "company": "Aircall"
   },
   {
@@ -430,8 +430,8 @@
     "company": "Brilliant"
   },
   {
-    "provider": "ashby",
-    "board": "browserbase",
+    "provider": "greenhouse",
+    "board": "browserbaseinc",
     "company": "Browserbase"
   },
   {

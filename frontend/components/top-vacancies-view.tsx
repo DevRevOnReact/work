@@ -7,6 +7,7 @@ import type { TopVacancies } from "@/lib/types";
 import type { WorkspaceState } from "@/hooks/use-workspace";
 import { AutoApplyButton } from "./application-panel";
 import { FavoriteButton, VacancyTabs } from "./vacancy-favorites";
+import { VacancyReplyLink } from "./vacancy-reply-link";
 
 export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
   const [page, setPage] = useState(0);
@@ -61,6 +62,7 @@ export function TopVacanciesView({state: s}: {state: WorkspaceState}) {
         {job.eligibility === "rejected" && <p className="notice error">Есть ограничения допуска — проверьте условия вакансии.</p>}
         {job.eligibility === "unknown" && <p className="notice">Добавлено после вашей проверки в Telegram. Доступность и право на работу остаются неподтверждёнными.</p>}
         {job.salary && <p>{job.salary}</p>}
+        <VacancyReplyLink job={job}/>
         <a className="button" href={job.canonical_url} target="_blank" rel="noreferrer">Открыть вакансию ↗</a>
         <AutoApplyButton canonicalUrl={job.canonical_url}/>
       </article>)}</div>

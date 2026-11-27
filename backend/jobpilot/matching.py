@@ -76,6 +76,7 @@ def _role_types(text: str) -> set[str]:
              "fullstack": r"full[ -]?stack|фулл?ст[еэ]к",
              "mobile": r"react native|flutter|android|ios|mobile|мобильн.*разработ",
              "data": r"data (?:engineer|scientist)|machine learning|ml engineer",
+             "ai": r"\b(?:ai[/ -]ml|applied ai|generative ai|genai|llm|ai|ml)\b(?:[ /-]+(?:software )?(?:engineer|developer))?|machine learning",
              "devops": r"devops|site reliability|\bsre\b",
              "recruiting": r"recruit|подбор.*персонал"}
     return {key for key, pattern in rules.items() if re.search(pattern, text, re.I)}
@@ -172,7 +173,9 @@ def evaluate_match(job: JobInput, profile: Profile, at: datetime | None = None) 
         resume_roles = infer_software_role(_detected(header, vocabulary))
     # Full-stack evidence can cover either half when the corresponding stack is present.
     compatible_roles = set(resume_roles)
-    if "fullstack" in resume_roles:
+    if "ai" in resume_roles:
+        compatible_roles |= infer_software_role(actual)
+    if "fullstack" in compatible_roles:
         compatible_roles |= {"frontend", "backend"}
     if job_roles:
         role_ratio = float(bool(job_roles & compatible_roles))

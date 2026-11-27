@@ -38,6 +38,22 @@ def eligible_for_review(job: dict[str, Any]) -> bool:
                 and published and current - timedelta(hours=WINDOW_HOURS) <= published <= current)
 
 
+def matches_search(db: Session, review: VacancyReview) -> bool:
+    """A queued card must still satisfy the search's current non-date filters."""
+    from .domain import JobInput
+    from .searches import SearchFilters, matches
+    search = db.get(SavedSearch, review.search_id)
+    if not search:
+        return False
+    try:
+        filters = SearchFilters.model_validate(search.filters).model_copy(update={"posted_days": 0, "min_score": MIN_SCORE})
+        return matches(JobInput.model_validate({"provider": "manual", "external_id": "", "description": "", **review.data}), filters,
+                       {**review.data.get("explanation", {}), "score": review.data.get("score", 0),
+                        "eligibility": review.data.get("eligibility")})
+    except ValueError:
+        return False
+
+
 def matching_reviews(db: Session, job: dict[str, Any]) -> list[VacancyReview]:
     rows = db.scalars(select(VacancyReview).where(
         (VacancyReview.identity_key == identity(job)) |
@@ -65,7 +81,7 @@ def _queue(db: Session, review: VacancyReview, *, enqueue_without_credentials: b
     from .notifications import channels
     if review.status != "pending" or (not enqueue_without_credentials and "telegram" not in channels()):
         return False
-    if not eligible_for_review(review.data) or db.get(SavedSearch, review.search_id) is None:
+    if not eligible_for_review(review.data) or not matches_search(db, review):
         return False
     notification_key = hashlib.sha256(f"telegram-review-v1:{review.id}:{review.context_hash}".encode()).hexdigest()
     if db.get(SearchNotification, notification_key) is not None:
@@ -165,7 +181,7 @@ def enqueue_pending_reviews(db: Session) -> None:
                                                         VacancyReview.notification_id.is_(None))
                              .order_by(VacancyReview.updated_at, VacancyReview.id).limit(200)):
         search = db.get(SavedSearch, review.search_id)
-        if (not search or not search.enabled or not eligible_for_review(review.data)
+        if (not search or not search.enabled or not eligible_for_review(review.data) or not matches_search(db, review)
                 or review.context_hash != context_hash(db, review.data)):
             review.status = "stale"
         else:

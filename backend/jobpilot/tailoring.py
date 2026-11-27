@@ -172,7 +172,7 @@ def generate_resume(resume: Resume, profile: Profile, job: Job | JobInput, outpu
     context = vacancy.title + "\n" + vacancy.description
     skills = sorted(dict.fromkeys(profile.skills), key=lambda value: not _contains(value, context))
     relevant = [value for value in skills if _contains(value, context)]
-    russian = bool(re.search(r"[а-яё]", profile.resume_text[:500], re.IGNORECASE))
+    russian = False
     paragraphs: list[tuple[str, str]] = []
     if profile.full_name:
         paragraphs.append((profile.full_name, "Title"))
@@ -191,14 +191,16 @@ def generate_resume(resume: Resume, profile: Profile, job: Job | JobInput, outpu
 def generate_cover_letter(profile: Profile, job: Job | JobInput, output_dir: Path) -> Path:
     """Create a brief evidence-only letter without inventing personal motivation."""
     vacancy = _job_input(job)
-    russian = bool(re.search(r"[а-яё]", vacancy.title, re.IGNORECASE))
+    russian = False
     from .answers import AnswerEngine
     engine = AnswerEngine(profile, {})
     facts = engine.facts(russian)
     keys = engine.relevant_facts(facts, vacancy.title + "\n" + vacancy.description)
     if not keys:
         raise NeedsAttention("Нет подтверждённых фактов для сопроводительного письма")
-    text = " ".join(facts[key] for key in keys)
+    text = " ".join(facts[key] for key in keys if not re.search("[А-Яа-яЁё]", facts[key]))
+    if not text:
+        raise NeedsAttention("Add verified English resume facts before generating an application document.")
     opening = "Здравствуйте! Прошу рассмотреть мою кандидатуру." if russian else "Hello! Please consider my application."
     closing = "Спасибо за рассмотрение моей кандидатуры." if russian else "Thank you for considering my application."
     paragraphs = [(("Сопроводительное письмо" if russian else "Cover letter"), "Title"),

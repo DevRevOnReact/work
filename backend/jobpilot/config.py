@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = ""
+    assistant_model_url: str = ""
+    assistant_media_url: str = ""
     llm_question_limit: int = Field(default=6, ge=0, le=50)
     browser_timeout_ms: int = 30000
     application_timeout_seconds: int = 600

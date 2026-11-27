@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 from pathlib import Path
@@ -41,10 +42,19 @@ class PublicFeed:
         self.client = client
 
     async def get(self, url: str) -> Any:
-        response = await self.client.get(url, timeout=30)
-        # Respect 429: Celery backoff handles retry; no rapid retries or proxy rotation.
-        response.raise_for_status()
-        return response.json()
+        for attempt in range(3):
+            try:
+                response = await self.client.get(url, timeout=30)
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                # Retry temporary upstream/network failures only. In particular,
+                # never retry 429 early or hide a missing/forbidden board.
+                transient = (not isinstance(exc, httpx.HTTPStatusError)
+                             or exc.response.status_code in {500, 502, 503, 504})
+                if not transient or attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
 
     def validate(self, board: str) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", board):
@@ -87,7 +97,7 @@ class AshbySource(PublicFeed):
                 canonical_url=canonical(j["applyUrl"]),
                 company=company,
                 title=j["title"],
-                location=("Remote · " if j.get("isRemote") else (j.get("workplaceType") or "") + " · ")
+                location=((j.get("workplaceType") or ("Remote" if j.get("isRemote") else "")) + " · ")
                 + (j.get("location") or ""),
                 description=j.get("descriptionPlain") or plain(j.get("descriptionHtml") or ""),
                 salary=(j.get("compensation") or {}).get("compensationTierSummary"),

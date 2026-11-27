@@ -1,0 +1,8 @@
+﻿id,ok,input_tokens,output_tokens,total_tokens,wall_seconds,answer_chars,answer_count,done_reason,generation_tokens_per_second
+en_short,False,818,280,1098,50.188,,,length,10.81
+ru_short,True,819,141,960,28.694,667,1,stop,11.01
+ru_instruction,True,496,55,551,15.157,225,1,stop,11.91
+vacancy,True,1007,129,1136,30.845,665,1,stop,11.81
+ocr,True,641,28,669,15.084,108,1,stop,11.93
+en_repeat,False,818,280,1098,28.493,,,length,10.09
+policy,True,0,0,0,0.298,67,1,no_model_call,0

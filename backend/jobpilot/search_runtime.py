@@ -24,17 +24,19 @@ class SearchRuntime:
 
     def start(self) -> None:
         # A stopped process has no remaining local tasks. Preserve old results.
+        owns_queue = not settings().hosted_mode or settings().automatic_search_schedule
         with SessionLocal() as db:
-            stale = (SavedSearch.started_at < now() - timedelta(minutes=20)) if settings().hosted_mode else true()
+            stale = true() if owns_queue else (SavedSearch.started_at < now() - timedelta(minutes=20))
             recovered = list(db.scalars(update(SavedSearch).where(SavedSearch.status.in_(["queued", "running"]), stale).values(
                 status="failed", completed_at=now(), errors=["Локальный процесс перезапущен; запустите поиск снова"],
                 progress=advance({}, "failed", "Процесс перезапущен; предыдущий поиск прерван", "error"))
                 .returning(SavedSearch.id)))
             from .notifications import enqueue_search_report
-            for search_id in recovered:
-                search = db.get(SavedSearch, search_id)
-                if search:
-                    enqueue_search_report(db, search)
+            if not owns_queue:
+                for search_id in recovered:
+                    search = db.get(SavedSearch, search_id)
+                    if search:
+                        enqueue_search_report(db, search)
             db.commit()
             try:
                 from .vacancy_review import backfill_saved_reviews
@@ -43,6 +45,9 @@ class SearchRuntime:
             except Exception as exc:
                 db.rollback()
                 log.warning("Could not queue saved vacancies for review: %s", type(exc).__name__)
+        if owns_queue:
+            for search_id in recovered:
+                self.enqueue(search_id)
         self.task = asyncio.create_task(self.schedule())
         self.telegram_task = asyncio.create_task(self.poll_telegram())
 

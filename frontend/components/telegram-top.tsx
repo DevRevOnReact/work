@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import type { TopVacancies } from "@/lib/types";
 import { FavoriteButton, VacancyTabs } from "./vacancy-favorites";
+import { VacancyReplyLink } from "./vacancy-reply-link";
 
 declare global { interface Window { Telegram?: { WebApp?: { initData: string; ready: () => void; expand: () => void } } } }
 export function TelegramTop() {
@@ -50,6 +51,7 @@ export function TelegramTop() {
       <p>{job.company} · {job.location || "Местоположение не указано"}</p>
       <p>{job.score}/100 · {job.resume_filename}</p>
       {job.salary && <p>{job.salary}</p>}
+      <VacancyReplyLink job={job} telegram/>
       <a className="button" href={job.canonical_url} target="_blank" rel="noreferrer">Открыть вакансию ↗</a>
     </article>)}{!data.items.length && <p>{favorites ? "В избранном пока пусто. Добавьте вакансию сердечком." : "Подходящих вакансий пока нет."}</p>}
     {data.total > 20 && <div className="button-row"><button className="button" disabled={page === 0} onClick={() => setPage(page - 1)}>Назад</button><span>{page + 1}</span><button className="button" disabled={(page + 1) * 20 >= data.total} onClick={() => setPage(page + 1)}>Далее</button></div>}</>}

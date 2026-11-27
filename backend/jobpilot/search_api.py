@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import session
 from .http import authenticate, serialize
-from .models import SavedSearch, SearchNotification, now
+from .models import SavedSearch, SearchNotification, TopVacancy, now
 from .progress import advance
 from .schedule import next_run
 from .search_setup import ensure_resume_searches
@@ -84,6 +84,7 @@ def update_search(search_id: str, body: SearchInput, db: Session = Depends(sessi
     if changed:
         s.results, s.result_count, s.completed_at, s.errors, s.status = [], 0, None, [], "idle"
         s.progress = {}
+        db.execute(delete(TopVacancy).where(TopVacancy.search_id == s.id, TopVacancy.favorite.is_(False)))
     db.commit()
     return serialize(s)
 

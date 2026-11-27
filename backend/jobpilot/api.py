@@ -14,6 +14,9 @@ from .job_api import router as job_router
 from .linkedin_api import router as linkedin_router
 from .linkedin_jobs import router as linkedin_jobs_router
 from .profile_api import router as profile_router
+from .reply_api import mini as reply_mini, web as reply_web
+from .reply_runtime import ReplyWorker
+from .mobile_api import admin as mobile_admin, mobile
 from .resume_api import router as resume_router
 from .search_api import router as search_router
 from .services import (
@@ -33,6 +36,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError("API_TOKEN must be at least 32 characters")
     settings().data_dir.mkdir(parents=True, exist_ok=True)
     with SessionLocal() as db:
+        from .resumes import refresh_resume_records
+        refresh_resume_records(db)
         bootstrap(db)
         from .companies import seed_companies
         from .search_setup import ensure_resume_searches
@@ -48,9 +53,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     application_runtime = ApplicationRuntime()
     app.state.application_runtime = application_runtime
     application_runtime.start()
+    assistant = ReplyWorker() if settings().assistant_model_url else None
+    if assistant:
+        assistant.thread.start()
     try:
         yield
     finally:
+        if assistant:
+            assistant.stop()
         if runtime:
             runtime.stop()
         application_runtime.stop()
@@ -77,6 +87,10 @@ def ready(db: Session = Depends(session)) -> dict[str, str]:
 
 
 app.include_router(profile_router)
+app.include_router(reply_web)
+app.include_router(mobile_admin)
+app.include_router(mobile)
+app.include_router(reply_mini)
 app.include_router(resume_router)
 app.include_router(source_router)
 app.include_router(job_router)

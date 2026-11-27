@@ -4,6 +4,12 @@
 !.env.example
 .venv
 data
+migration
+backups
+android/
+access.txt
+*.tar.gz
+android
 resume.pdf
 **/node_modules
 **/.next

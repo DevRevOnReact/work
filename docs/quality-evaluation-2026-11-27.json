@@ -1,0 +1,190 @@
+{
+  "dataset": "Synthetic expert-authored fixtures, 6 extraction cases, 3 resumes x 12 vacancies",
+  "limitations": "Fixture results do not estimate real-world precision. Production evaluation needs owner-labelled relevant and irrelevant vacancies.",
+  "extraction": {
+    "skill_precision": 1.0,
+    "skill_recall": 1.0,
+    "years_exact_match": 1.0,
+    "cases": [
+      {
+        "case": "Explicit years",
+        "expected": [
+          "React",
+          "TypeScript"
+        ],
+        "actual": [
+          "React",
+          "TypeScript"
+        ],
+        "years_expected": 5,
+        "years_actual": 5.0
+      },
+      {
+        "case": "No inferred years",
+        "expected": [
+          "PostgreSQL",
+          "Python"
+        ],
+        "actual": [
+          "PostgreSQL",
+          "Python"
+        ],
+        "years_expected": 0,
+        "years_actual": 0
+      },
+      {
+        "case": "Negated skill",
+        "expected": [
+          "React"
+        ],
+        "actual": [
+          "React"
+        ],
+        "years_expected": 0,
+        "years_actual": 0
+      },
+      {
+        "case": "Aliases",
+        "expected": [
+          "Next.js",
+          "PostgreSQL",
+          "React"
+        ],
+        "actual": [
+          "Next.js",
+          "PostgreSQL",
+          "React"
+        ],
+        "years_expected": 0,
+        "years_actual": 0
+      },
+      {
+        "case": "Overlapping names",
+        "expected": [
+          "JavaScript",
+          "TypeScript"
+        ],
+        "actual": [
+          "JavaScript",
+          "TypeScript"
+        ],
+        "years_expected": 0,
+        "years_actual": 0
+      },
+      {
+        "case": "Sections",
+        "expected": [
+          "Python",
+          "React"
+        ],
+        "actual": [
+          "Python",
+          "React"
+        ],
+        "years_expected": 0,
+        "years_actual": 0
+      }
+    ]
+  },
+  "evidence": {
+    "late_achievement_retrieved": true
+  },
+  "retrieval": [
+    {
+      "resume": "Frontend React Engineer",
+      "baseline": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 1.0,
+        "ndcg_at_3": 1.0,
+        "returned": 3
+      },
+      "hybrid": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 1.0,
+        "ndcg_at_3": 1.0,
+        "returned": 3
+      },
+      "top": [
+        {
+          "title": "React UI Engineer",
+          "score": 100,
+          "gold_grade": 3
+        },
+        {
+          "title": "Frontend Developer",
+          "score": 85,
+          "gold_grade": 3
+        },
+        {
+          "title": "Web Engineer",
+          "score": 79,
+          "gold_grade": 2
+        }
+      ]
+    },
+    {
+      "resume": "Python Backend Engineer",
+      "baseline": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 1.0,
+        "ndcg_at_3": 0.9595,
+        "returned": 3
+      },
+      "hybrid": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 1.0,
+        "ndcg_at_3": 0.9595,
+        "returned": 3
+      },
+      "top": [
+        {
+          "title": "Python Backend Engineer",
+          "score": 100,
+          "gold_grade": 3
+        },
+        {
+          "title": "API Engineer",
+          "score": 100,
+          "gold_grade": 2
+        },
+        {
+          "title": "Backend Developer",
+          "score": 85,
+          "gold_grade": 3
+        }
+      ]
+    },
+    {
+      "resume": "Full Stack Engineer",
+      "baseline": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 0.3333,
+        "ndcg_at_3": 0.4949,
+        "returned": 7
+      },
+      "hybrid": {
+        "precision_at_3": 1.0,
+        "recall_at_3": 0.3333,
+        "ndcg_at_3": 1.0,
+        "returned": 7
+      },
+      "top": [
+        {
+          "title": "Full Stack Engineer",
+          "score": 100,
+          "gold_grade": 3
+        },
+        {
+          "title": "Fullstack Developer",
+          "score": 90,
+          "gold_grade": 3
+        },
+        {
+          "title": "Python Backend Engineer",
+          "score": 100,
+          "gold_grade": 2
+        }
+      ]
+    }
+  ]
+}

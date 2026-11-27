@@ -1,0 +1,30 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.blyadota.jobpilot.assistant"
+    android:versionCode="6" android:versionName="1.3.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <application android:label="JobPilot" android:icon="@drawable/brand" android:theme="@style/AppTheme"
+        android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true">
+        <activity android:name=".AssistantActivity" android:exported="true" android:launchMode="singleTop"
+            android:configChanges="keyboardHidden|orientation|screenSize" android:windowSoftInputMode="adjustResize">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/><data android:mimeType="image/png"/><data android:mimeType="image/jpeg"/>
+                <data android:mimeType="audio/*"/></intent-filter>
+            <intent-filter android:label="Ответить с JobPilot"><action android:name="android.intent.action.PROCESS_TEXT"/>
+                <category android:name="android.intent.category.DEFAULT"/><data android:mimeType="text/plain"/></intent-filter>
+        </activity>
+        <activity android:name=".CaptureConsentActivity" android:configChanges="keyboardHidden|orientation|screenSize" android:exported="false" android:excludeFromRecents="true"
+            android:taskAffinity="dev.blyadota.jobpilot.assistant.capture" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
+        <service android:name=".ScreenCaptureService" android:exported="false" android:foregroundServiceType="mediaProjection"/>
+        <service android:name=".EdgeService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled visible edge toolbox for drafting recruiter replies across apps"/>
+        </service>
+        <service android:name=".DraftJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false"/>
+    </application>
+</manifest>

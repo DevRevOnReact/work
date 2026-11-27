@@ -18,6 +18,7 @@ from .services import audit, rescore, scoring_context
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_TEXT_CHARS = 1_000_000
+PARSER_VERSION = 3
 MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -37,7 +38,8 @@ SKILLS = (
     "Go", "Golang", "Rust", "C++", "C#", ".NET", "PHP", "Laravel", "Ruby", "Rails",
     "Angular", "Vue", "Svelte", "Swift", "Flutter", "Pandas", "NumPy", "PyTorch",
     "TensorFlow", "OpenAI", "LangChain", "LLM", "Figma", "Jest", "Playwright", "Cypress",
-    "PixiJS", "WebGL", "GSAP", "RxJS", "NgRx", "Svelte",
+    "PixiJS", "WebGL", "GSAP", "RxJS", "NgRx", "Pydantic", "pgvector",
+    "Elasticsearch", "BM25", "RAG", "CatBoost", "OCR", "Strapi", "Sentry", "GrowthBook",
 )
 DOMAINS = (
     "SaaS", "fintech", "payments", "subscriptions", "CRM", "dashboards", "analytics",
@@ -48,6 +50,8 @@ ALIASES = {
     "Node.js": r"node\.?js", "PostgreSQL": r"postgres(?:ql)?",
     "Tailwind": r"tailwind(?:\s*css)?", "Vue": r"vue(?:\.js|js)?",
     "PixiJS": r"pixi\.?js", "WebSockets": r"websockets?",
+    "TanStack Query": r"(?:tanstack|react)\s+query",
+    "Go": r"go(?![\s-]+(?:to|from|through|live|beyond|back|forward|into|over)\b)",
 }
 
 
@@ -70,18 +74,54 @@ def verified_resume(db: Session, resume: Resume, records: dict[str, Any]) -> Par
     if hashlib.sha256(content).hexdigest() != resume.sha256:
         raise ValueError("Нарушена целостность файла резюме. Загрузите его повторно")
     record = records.get(resume.id, {})
-    # Records created before versioning used the same extractor.
-    if (record.get("sha256") == resume.sha256 and record.get("parser_version", 1) == 1
+    if (record.get("sha256") == resume.sha256 and record.get("parser_version") == PARSER_VERSION
             and isinstance(record.get("text"), str) and record["text"]
             and isinstance(record.get("facts"), dict) and isinstance(record.get("warnings"), list)):
         return ParsedResume(record["text"], record["facts"], record["warnings"])
     return parse_resume(content, resume.filename)
 
 
+def refresh_resume_records(db: Session) -> int:
+    """Refresh versioned extraction from intact originals without switching the active CV."""
+    candidate = db.get(Candidate, 1)
+    if not candidate:
+        return 0
+    records = dict(candidate.facts.get("resumes", {}))
+    changed = 0
+    active = {}
+    for resume in db.scalars(select(Resume)):
+        record = records.get(resume.id, {})
+        if record.get("parser_version") == PARSER_VERSION and record.get("sha256") == resume.sha256:
+            continue
+        try:
+            parsed = verified_resume(db, resume, records)
+        except (OSError, ValueError):
+            continue
+        records[resume.id] = {**record, "text": parsed.text, "facts": parsed.facts, "warnings": parsed.warnings,
+                              "sha256": resume.sha256, "parser_version": PARSER_VERSION}
+        if resume.id == candidate.facts.get("active_resume_id"):
+            active = {key: parsed.facts[key] for key in (
+                "skills", "domains", "years_experience", "employment", "projects", "education", "languages")}
+            active.update(resume_text=parsed.text, resume_parse_warnings=parsed.warnings)
+        changed += 1
+    if changed:
+        candidate.facts = {**candidate.facts, **active, "resumes": records}
+        candidate.version += 1
+    return changed
+
+
 def _recognized(text: str, terms: tuple[str, ...]) -> list[str]:
-    return [term for term in terms if re.search(
-        r"(?<![\w+#])(?:" + ALIASES.get(term, re.escape(term)) + r")(?![\w+#])", text, re.IGNORECASE
-    )]
+    found = []
+    for term in terms:
+        pattern = r"(?<![\w+#])(?:" + ALIASES.get(term, re.escape(term)) + r")(?![\w+#])"
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            prefix = re.split(r"[\n;.!?]", text[:match.start()])[-1][-85:]
+            if not re.search(r"(?:no|without|lack of|not).*?(?:experience|knowledge)|never used|"
+                             r"нет.*опыта|не работал|не использовал|планирую изучить|want to learn",
+                             prefix, re.IGNORECASE):
+                found.append(term)
+                break
+    return found
 
 
 def extract_facts(text: str) -> tuple[dict[str, Any], list[str]]:
@@ -133,6 +173,13 @@ def extract_facts(text: str) -> tuple[dict[str, Any], list[str]]:
     )
     if not years:
         years = re.search(
+            r"\b(\d{1,2}(?:\.\d)?)\+?\s*(?:years?|yrs?)\s+(?:in|of)\s+"
+            r"(?:(?:professional|commercial)\s+)?(?:software\s+engineering|software\s+development|"
+            r"(?:front[ -]?end|back[ -]?end|full[ -]?stack|web)\s+(?:development|engineering))\b",
+            text, re.IGNORECASE,
+        )
+    if not years:
+        years = re.search(
             r"\b(\d{1,2}(?:[.,]\d)?)\+?\s*(?:лет|года?|год)\s+"
             r"(?:(?:коммерческого|профессионального|общего)\s+)?опыта\b",
             text, re.IGNORECASE,
@@ -175,12 +222,14 @@ def extract_facts(text: str) -> tuple[dict[str, Any], list[str]]:
     sections = {
         "experience": "employment", "work experience": "employment",
         "professional experience": "employment", "employment": "employment",
+        "employment history": "employment", "career history": "employment",
         "projects": "projects", "selected projects": "projects", "education": "education",
+        "professional projects": "projects", "personal projects": "projects",
         "опыт работы": "employment", "проекты": "projects", "образование": "education",
     }
     headings = set(sections) | {
         "skills", "technical skills", "summary", "profile", "languages", "certifications",
-        "contact", "interests", "навыки", "языки",
+        "contact", "interests", "навыки", "языки", "professional summary", "technical expertise",
     }
     current: str | None = None
     section_lines: list[str] = []
@@ -306,7 +355,7 @@ def activate_resume(db: Session, candidate: Candidate, resume: Resume, parsed: P
     records = dict(candidate.facts.get("resumes", {}))
     records[resume.id] = {
         "filename": resume.filename, "sha256": resume.sha256,
-        "parser_version": 1,
+        "parser_version": PARSER_VERSION,
         "media_type": MEDIA_TYPES[Path(resume.filename).suffix.lower()],
         "text": parsed.text, "facts": parsed.facts, "warnings": parsed.warnings,
     }

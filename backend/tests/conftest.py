@@ -14,7 +14,9 @@ from jobpilot.services import bootstrap
 
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
+    from jobpilot.config import settings
+    monkeypatch.setattr(settings(), "store_resume_files_in_db", False)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     with sessionmaker(engine, expire_on_commit=False)() as session:

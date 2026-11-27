@@ -35,7 +35,9 @@ def refresh_search_scoring(db: Session, candidate: Candidate) -> None:
     for search in searches.values():
         resume = db.get(Resume, search.resume_id)
         if resume and search.name.endswith("· основной поиск") and search.filters.get("title") in {
-                "Frontend, Front-end, Front end", "Full Stack, Fullstack, Full-stack"}:
+                "Frontend, Front-end, Front end", "Full Stack, Fullstack, Full-stack",
+                "Full Stack, Fullstack, Full-stack, Software Engineer, Product Engineer, Backend, Back-end, Back end",
+                "Frontend, Front-end, Front end, UI Engineer, Web Engineer, Web Developer, Product Engineer, Software Engineer"}:
             defaults = resume_filters(resume, records.get(resume.id, {}))
             changed = {"title": defaults.title}
             if search.filters.get("skills") == previous_skills.get(resume.id) and search.filters.get("skills_mode") == "any":

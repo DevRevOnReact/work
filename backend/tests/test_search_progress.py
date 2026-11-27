@@ -57,7 +57,7 @@ def test_queue_clears_previous_errors_and_completion(db, monkeypatch):
     assert not runtime.enqueue(value.id)
 
 
-def test_progress_is_pollable_during_io_and_fresh_results_only(tmp_path):
+def test_progress_is_pollable_during_io_and_uses_selected_publication_period(tmp_path):
     engine = create_engine(f"sqlite:///{(tmp_path / 'progress.db').as_posix()}",
                            connect_args={"check_same_thread": False, "timeout": 0.2})
     Base.metadata.create_all(engine)
@@ -65,7 +65,7 @@ def test_progress_is_pollable_during_io_and_fresh_results_only(tmp_path):
     with factory() as db:
         bootstrap(db)
         first, _ = setup_resumes(db)
-        value = SavedSearch(name="test", resume_id=first.id, filters={})
+        value = SavedSearch(name="test", resume_id=first.id, filters={"posted_days": 3})
         db.add_all([value, Source(provider="ashby", company="Acme", board="acme")]); db.commit()
         search_id = value.id
     observed = []
@@ -84,7 +84,7 @@ def test_progress_is_pollable_during_io_and_fresh_results_only(tmp_path):
         with factory() as db:
             value = db.get(SavedSearch, search_id)
             assert observed == ["fetching"]
-            assert value.status == "complete" and value.result_count == 1
+            assert value.status == "complete" and value.result_count == 2
             assert value.progress["done"] == value.progress["total"] == 1
             assert value.progress["unknown_dates"] == 1
             assert value.progress["events"][-1]["message"].startswith("Готово:")

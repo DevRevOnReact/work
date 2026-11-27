@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-MATCHING_VERSION = "matching-v2.1"
+MATCHING_VERSION = "matching-v2.3"
 
 class Profile(BaseModel):
     full_name: str | None = None
@@ -72,6 +72,8 @@ def profile_fingerprint(profile: Profile) -> str:
 
 
 def _contains(term: str, text: str) -> bool:
+    if term.strip().casefold() == "go":
+        return bool(re.search(r"\bgo\b(?![\s-]+(?:to|from|through|live|beyond|back|forward|into|over)\b)", text, re.I))
     return bool(term.strip()) and bool(
         re.search(r"(?<!\w)" + re.escape(term.strip().lower()) + r"(?!\w)", text.lower())
     )
@@ -118,6 +120,11 @@ SKILL_ALIASES: dict[str, tuple[str, ...]] = {
     "PyTorch": ("pytorch",), "TensorFlow": ("tensorflow",),
     "Redux": ("redux", "redux toolkit"), "Zustand": ("zustand",),
     "TanStack Query": ("tanstack query", "react query"),
+    "Pydantic": ("pydantic",), "pgvector": ("pgvector",),
+    "Elasticsearch": ("elasticsearch",), "BM25": ("bm25",),
+    "RAG": ("rag", "retrieval-augmented generation", "retrieval augmented generation"),
+    "CatBoost": ("catboost",), "OCR": ("ocr",), "Strapi": ("strapi",),
+    "Sentry": ("sentry",), "GrowthBook": ("growthbook",),
     "Tailwind": ("tailwind", "tailwindcss"), "Storybook": ("storybook",),
     "Vite": ("vite",), "Jest": ("jest",), "Playwright": ("playwright",),
     "Excel": ("excel",), "Power BI": ("power bi",), "Tableau": ("tableau",),
@@ -240,10 +247,9 @@ def _eligibility(job: JobInput, profile: Profile) -> tuple[str, list[str]]:
     reasons: list[str] = []
     rejected = False
     unknown = False
-    remote = bool(re.search(r"\bremote\b|удал[её]н", text))
-    onsite = bool(re.search(r"\b(?:onsite|on-site|hybrid)\b|офис|гибрид", location)) or bool(
-        re.search(r"(?:role|position) is (?:onsite|on-site|hybrid)", text)
-    )
+    from .workplace import classify
+    mode = classify(job.location, job.description, job.title)
+    remote, onsite = mode == "remote", mode in {"onsite", "hybrid"}
     sponsored = bool(re.search(
         r"(?:visa|relocation) sponsorship (?:available|provided)|"
         r"(?:provide|offer|provides|offers) (?:visa |relocation )?sponsorship", text
@@ -257,23 +263,37 @@ def _eligibility(job: JobInput, profile: Profile) -> tuple[str, list[str]]:
     residence = _countries(profile.location)
     posted = _countries(location)
     restrictions = re.findall(
-        r"(?:must|need to|have to) (?:be based|be|reside|live) in ([^.!\n]+)|"
+        r"(?:must|need to|have to|(?:are|is) required to) (?:be based|be located|be|reside|live) in ([^.!\n]+)|"
+        r"(?:work|working|hire|hiring) (?:remotely )?(?:from )?anywhere in ([^.!\n]+)|"
         r"((?:[\w.]+[ -]){0,2}[\w.]+)[ -]only", text
     )
     allowed: set[str] = set()
+    restriction_text = " ".join(" ".join(groups) for groups in restrictions)
     for groups in restrictions:
         allowed |= _countries(" ".join(groups))
+    # Aggregators often omit structured geography while retaining an explicit
+    # role-location heading in the description. Do not read general office lists.
+    headings = re.findall(
+        r"\b(?:job |work )?locations?\s*:\s*([^.!?\n]{1,100}?)(?=\s+(?:who|what|about|we|our|you|"
+        r"salary|compensation|description|responsibilities|requirements)\b|[.!?\n]|$)",
+        job.description.lower()[:1000],
+    )
+    geography = "\n".join([location, *headings, restriction_text])
+    posted |= _countries("\n".join(headings))
     scope = allowed or posted
     worldwide = bool(re.search(r"worldwide|\bglobal\b|anywhere", location)) or bool(re.search(
         r"(?:work|working|hire|hiring) (?:remotely )?from anywhere|"
         r"remote[^.!\n]{0,25}worldwide", job.description.lower()
     ))
-    regional = bool(re.search(r"\b(?:emea|eu|eea|europe)\b", location))
-    if re.search(r"\b(?:eu|eea)[ -]only\b", text) or re.search(r"\b(?:eu|eea)\b", location):
-        scope = _EEA if _contains("eea", location) or re.search(r"\beea[ -]only\b", text) else _EU
+    regional = bool(re.search(r"\b(?:emea|eu|eea|europe)\b", geography))
+    if re.search(r"\b(?:eu|eea)[ -]only\b", text) or re.search(r"\b(?:eu|eea)\b", geography):
+        scope = _EEA if _contains("eea", geography) or re.search(r"\beea[ -]only\b", text) else _EU
         worldwide = False
-    elif _contains("emea", location):
+    elif _contains("emea", geography):
         scope = scope or _EMEA
+    if restrictions and not allowed and not regional:
+        unknown = True
+        reasons.append("Неизвестно: явное ограничение места проживания требует проверки")
     if scope:
         if residence and not residence & scope and not (onsite and sponsored and not allowed):
             rejected = True

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check JobPilot verified GitHub revision every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=jobpilot-deploy.service
+
+[Install]
+WantedBy=timers.target

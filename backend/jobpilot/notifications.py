@@ -246,8 +246,9 @@ def deliver_pending(*, only_ids: list[str] | None = None, batch_size: int = 20) 
                                                    "disable_web_page_preview": True}
                         review = db.scalar(select(VacancyReview).where(VacancyReview.notification_id == item.id))
                         if review:
-                            from .vacancy_review import context_hash, eligible_for_review
+                            from .vacancy_review import context_hash, eligible_for_review, matches_search
                             if (review.status not in {"pending", "top_pending"} or review.context_hash != context_hash(db, review.data)
+                                    or not matches_search(db, review)
                                     or (review.status == "pending" and not eligible_for_review(review.data))):
                                 item.status = "superseded"
                                 continue

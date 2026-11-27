@@ -22,7 +22,7 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
                      adapters: Any = ADAPTERS, use_cache: bool = True, *,
                      enqueue_without_credentials: bool = False) -> None:
     started = now()
-    progress = advance({}, "starting", "Начинаем поиск вакансий за сегодня", done=0, total=0)
+    progress = advance({}, "starting", "Начинаем поиск по резюме и сохранённым фильтрам", done=0, total=0)
     with session_factory() as db:
         claimed = db.execute(update(SavedSearch).where(
             SavedSearch.id == search_id,
@@ -81,7 +81,7 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
                                 jobs = await adapter(client).fetch(source.board, source.company)
                                 if use_cache:
                                     _cache[key] = monotonic(), jobs
-                                    while len(_cache) > 64 or sum(len(v[1]) for v in _cache.values()) > 15000:
+                                    while len(_cache) > 256 or sum(len(v[1]) for v in _cache.values()) > 30000:
                                         _cache.popitem(last=False)
                             inputs.extend(jobs)
                             source.error, source.synced_at = None, now()
@@ -108,13 +108,13 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
         checked_at = now()
         fresh = sum(published_today(job, checked_at) for job in inputs)
         unknown = sum(job.published_at is None for job in inputs)
-        report("scoring", f"За сегодня: {fresh}; без даты: {unknown}. Применяем фильтры и оцениваем по резюме",
+        report("scoring", f"Всего: {len(inputs)}; за сегодня: {fresh}; без даты: {unknown}. Применяем фильтры и оцениваем по резюме",
                fresh=fresh, unknown_dates=unknown)
         with session_factory() as db:
             search = db.get(SavedSearch, search_id, populate_existing=True)
             if not search or search.status != "running":
                 return
-            results, count = make_results(db, search, inputs, today_only=True, at=checked_at)
+            results, count = make_results(db, search, inputs, at=checked_at)
             report("scoring", "Формируем топ за последние 72 часа · оценка от 60")
             top_filters = SearchFilters.model_validate(search.filters).model_copy(
                 update={"posted_days": 0, "min_score": 60, "sort": "score"})
@@ -133,7 +133,8 @@ def run_saved_search(search_id: str, session_factory: Any = SessionLocal,
             save_top_vacancies(db, search, top_results)
             search.results, search.result_count = results, count
             search.errors, search.status, search.completed_at = errors, "complete", now()
-            search.progress = advance(progress, "complete", f"Готово: {count} подходящих вакансий за сегодня",
+            search.progress = advance(progress, "complete", f"Готово: {count} подходящих вакансий по выбранным фильтрам. "
+                                      f"Топ за 72 часа: {len(top_results)}; на проверку географии: {review_count}",
                                       matched=count, top_matched=len(top_results), top_review=review_count)
             from .notifications import enqueue_digest, enqueue_top_telegram, enqueue_search_report
             try:

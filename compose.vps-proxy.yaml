@@ -1,0 +1,6 @@
+# Add this file when the existing reverse proxy runs in rootful Docker.
+# Bind only the host's Docker bridge, never its public IP.
+services:
+  app:
+    ports:
+      - "${JOBPILOT_PROXY_BIND_IP:-172.17.0.1}:${JOBPILOT_PROXY_PORT:-10001}:10000"
