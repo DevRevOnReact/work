@@ -66,6 +66,14 @@ def unsupported_claims(reply: str, facts: dict[str, str], fact_ids: list[str]) -
     known = set(re.findall(r"(?<!\w)\d+(?:[.,]\d+)?%?", cited))
     technologies = set(_recognized(claims, SKILLS)) - set(_recognized(cited, SKILLS))
     missing = (numbers - known) | technologies
+    for sentence in re.split(r"(?<=[.!?])\s+", claims):
+        durations = re.findall(r"\b(\d+(?:\.\d+)?)\s+years?\b", sentence, re.I)
+        for skill in _recognized(sentence, SKILLS):
+            for duration in durations:
+                link = rf"(?:{re.escape(duration)}\s+years?[^.\n]{{0,45}}{re.escape(skill)}|" \
+                       rf"{re.escape(skill)}[^.\n]{{0,30}}{re.escape(duration)}\s+years?)"
+                if not re.search(link, cited, re.I):
+                    missing.add("unverified tenure in " + skill)
     for company in re.findall(r"\b(?:at|for)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)?)", claims):
         if company.casefold() not in cited.casefold():
             missing.add(company)

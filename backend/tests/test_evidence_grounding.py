@@ -47,6 +47,13 @@ def test_resume_negation_and_injection_are_not_skills_or_evidence():
     assert unsupported_claims("I led a team.", evidence, list(evidence))
 
 
+def test_total_tenure_does_not_become_skill_specific_tenure():
+    facts = {"skills": "React, Python", "experience": "5 years of total experience."}
+    assert unsupported_claims("I have 5 years of Python experience.", facts, list(facts))
+    direct = {"source.0": "5 years of experience with React"}
+    assert not unsupported_claims("I have 5 years of React experience.", direct, list(direct))
+
+
 @pytest.mark.parametrize("model_reply", [
     '{"reply":"I used Kubernetes for 12 years.","fact_ids":["skills"]}',
     '{"reply":"I built React interfaces.","fact_ids":["invented"]}',
